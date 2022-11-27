@@ -1,4 +1,4 @@
-# drspy: A *D*ata *R*eduction Toolkit for *S*pectroscopy and *P*hotometr*y*
+# drspy: A **D**ata **R**eduction Toolkit for **S**pectroscopy and **P**hotometr**y**
 
 ## Note
 
