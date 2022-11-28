@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drspy"
+version = "0.0.2"
+authors = [
+  { name="Ruining ZHAO", email="rnzhao@nao.cas.cn" },
+]
+description = "A Data Reduction Toolkit for Spectroscopy and Photometry"
+readme = "README.md"
+requires-python = ">=3.7.3"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3.0",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/RuiningZHAO/drspy"
+"Bug Tracker" = "https://github.com/RuiningZHAO/drspy/issues"
