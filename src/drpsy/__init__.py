@@ -25,6 +25,6 @@ class Conf(_config.ConfigNamespace):
 
 conf = Conf()
 
-__version__ = '0.0.2'
+__version__ = '0.0.3.1'
 
 __all__ = ['CCDDataList', 'concatenate', 'transform', 'conf']

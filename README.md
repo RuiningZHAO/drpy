@@ -1,5 +1,5 @@
 # drpsy
-A **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
+drpsy (pronounced "doctor psi") is a **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
 
 ## Note
 

@@ -5,25 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "drpsy"
 description = "A Data Reduction Toolkit for Astronomical Photometry and Spectroscopy"
+readme = {file = "README.md", content-type = "text/markdown"}
 authors = [
   {name = "Ruining ZHAO", email = "ruiningzhao@mail.bnu.edu.cn"}, 
 ]
-maintainers = [
-  {name = "Ruining ZHAO", email = "ruiningzhao@mail.bnu.edu.cn"}, 
-]
-readme = {file = "README.md", content-type = "text/markdown"}
-license = {file = "LICENSE"}
+requires-python = ">=3.7.3"
 classifiers = [
     "Programming Language :: Python :: 3", 
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)", 
     "Operating System :: OS Independent", 
 ]
-requires-python = ">=3.7.3"
 dynamic = ["version", "dependencies"]
 
 [project.urls]
 "Homepage" = "https://github.com/RuiningZHAO/drpsy"
-"Bug Tracker" = "https://github.com/RuiningZHAO/drpsy/issues"
+"Tracker" = "https://github.com/RuiningZHAO/drpsy/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]  # list of folders that contain the packages (["."] by default)
