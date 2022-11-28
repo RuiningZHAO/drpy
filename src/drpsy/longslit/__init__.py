@@ -1,5 +1,5 @@
 """
-drspy.longslit: a toolkit to reduce longslit spectroscopy data.
+drpsy.longslit: a toolkit to reduce longslit spectroscopy data.
 """
 
 # AstroPy
@@ -13,7 +13,7 @@ __all__ = ['response', 'illumination', 'align', 'fitcoords', 'dispcor', 'trace',
 
 
 class Conf(_config.ConfigNamespace):
-    """Configuration parameters for `drspy.longslit`."""
+    """Configuration parameters for `drpsy.longslit`."""
 
     pass
 

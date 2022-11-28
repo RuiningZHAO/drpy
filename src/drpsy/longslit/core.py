@@ -400,7 +400,7 @@ def align(ccdlist, slit_along, index=0):
 
     Returns
     -------
-    out : `~drspy.ccddatalist.CCDDataList`
+    out : `~drpsy.ccddatalist.CCDDataList`
         Aligned frames.
     """
 

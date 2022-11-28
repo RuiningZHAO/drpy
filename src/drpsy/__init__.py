@@ -1,5 +1,5 @@
 """
-drspy: a pythonic Data Reduction toolbox for Spectroscopy and Photometry
+drpsy: a pythonic Data Reduction toolbox for Spectroscopy and Photometry
 """
 
 # AstroPy
@@ -9,7 +9,7 @@ from .core import CCDDataList, concatenate, transform
 
 
 class Conf(_config.ConfigNamespace):
-    """Configuration parameters for `drspy`."""
+    """Configuration parameters for `drpsy`."""
 
     # Unit
     unit_ccddata = _config.ConfigItem(

@@ -1,5 +1,5 @@
 """
-drspy.modeling: fitting methods.
+drpsy.modeling: fitting methods.
 """
 
 # AstroPy
@@ -11,7 +11,7 @@ __all__ = ['Poly1D', 'Spline1D', 'Spline2D', 'GaussianSmoothing2D', 'conf']
 
 
 class Conf(_config.ConfigNamespace):
-    """Configuration parameters for `drspy.modeling`."""
+    """Configuration parameters for `drpsy.modeling`."""
 
     pass
 
