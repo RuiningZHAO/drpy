@@ -915,7 +915,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
         shifted_peaks = peak_tbl['peaks'].value - shift
         shifted_left_bases = peak_tbl['left_bases'].value - shift
         shifted_right_bases = peak_tbl['right_bases'].value - shift
-        heights = peak_tbl['peak_heights'].value
+        heights = peak_tbl['heights'].value
         
         refined_left_bases, refined_right_bases = _refinePeakBases(
             peaks=shifted_peaks, left_bases=shifted_left_bases, 
