@@ -1,5 +1,5 @@
 # drspy
-A **D**ata **R**eduction Toolkit for **S**pectroscopy and **P**hotometr**y**
+A **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
 
 ## Note
 
