@@ -3,20 +3,35 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "drspy"
-version = "0.0.2"
+name = "drpsy"
+description = "A Data Reduction Toolkit for Astronomical Photometry and Spectroscopy"
 authors = [
-  { name="Ruining ZHAO", email="rnzhao@nao.cas.cn" },
+  {name = "Ruining ZHAO", email = "ruiningzhao@mail.bnu.edu.cn"}, 
 ]
-description = "A Data Reduction Toolkit for Spectroscopy and Photometry"
-readme = "README.md"
-requires-python = ">=3.7.3"
+maintainers = [
+  {name = "Ruining ZHAO", email = "ruiningzhao@mail.bnu.edu.cn"}, 
+]
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE"}
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU General Public License v3.0",
-    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3", 
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)", 
+    "Operating System :: OS Independent", 
 ]
+requires-python = ">=3.7.3"
+dynamic = ["version", "dependencies"]
 
 [project.urls]
-"Homepage" = "https://github.com/RuiningZHAO/drspy"
-"Bug Tracker" = "https://github.com/RuiningZHAO/drspy/issues"
+"Homepage" = "https://github.com/RuiningZHAO/drpsy"
+"Bug Tracker" = "https://github.com/RuiningZHAO/drpsy/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]  # list of folders that contain the packages (["."] by default)
+include = ["*"]  # package names should match these glob patterns (["*"] by default)
+
+[tool.setuptools.package-data]
+drpsy = ["lib/**/*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "drpsy.__version__"}
+dependencies = {file = "requirements.txt"}
