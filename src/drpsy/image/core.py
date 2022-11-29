@@ -1,5 +1,5 @@
-from copy import deepcopy
 import warnings
+from copy import deepcopy
 
 from drpsy.validate import _validate1DArray, _validateCCDList
 
@@ -8,7 +8,7 @@ __all__ = ['concatenate']
 
 def concatenate(ccdlist, row_range, col_range, scale=None):
     """Concatenate two frames.
-    
+
     The region defined by ``row_range`` and ``col_range`` in the second frame is 
     replaced by that in the first frame. Usually this is used to concatenate 
     flat-fields or arc spectra of different exposure times. To concatenate multiple 
@@ -47,6 +47,7 @@ def concatenate(ccdlist, row_range, col_range, scale=None):
 
     if scale is None:
         scale = _validate1DArray(1, 'scale', 2, True)
+
     else:
         scale = _validate1DArray(scale, 'scale', 2, True)
 
@@ -57,6 +58,7 @@ def concatenate(ccdlist, row_range, col_range, scale=None):
 
     if (ccdlist[0].uncertainty is None) | (ccdlist[1].uncertainty is None):
         uncertainty_arr = None
+
     else:
         uncertainty_arr = scale[1] * ccdlist[1].uncertainty.array
         uncertainty_arr[row_start:row_end, col_start:col_end] = (
@@ -66,6 +68,7 @@ def concatenate(ccdlist, row_range, col_range, scale=None):
 
     if (ccdlist[0].mask is None) | (ccdlist[1].mask is None):
         mask_arr = None
+
     else:
         mask_arr = deepcopy(ccdlist[1].mask)
         mask_arr[row_start:row_end, col_start:col_end] = (
@@ -77,6 +80,7 @@ def concatenate(ccdlist, row_range, col_range, scale=None):
 
     if uncertainty_arr is None:
         nccd.uncertainty = None
+
     else:
         # Here ``nccd.uncertainty`` is definitely not `None`.
         nccd.uncertainty.array = uncertainty_arr

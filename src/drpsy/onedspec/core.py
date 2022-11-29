@@ -28,6 +28,8 @@ from drpsy.validate import (_validateBool, _validateString, _validateRange,
 from .utils import (_center1D_Gaussian, _refinePeakBases, _refinePeaks, loadSpectrum1D, 
                     loadStandardSpectrum, loadExtinctionCurve)
 
+__all__ = ['dispcor', 'sensfunc', 'calibrate1d']
+
 
 def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5, 
             sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
@@ -682,110 +684,3 @@ def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=F
     calibrated_spectrum1d.meta = meta
 
     return calibrated_spectrum1d
-
-
-def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d, 
-                use_uncertainty=False):
-    """Apply a flux calibration to a 2-dimensional spectrum.
-
-    Parameters
-    ----------
-    ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Input frame.
-
-    slit_along : str
-        `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
-        calculations. Note that this will NOT affect the returned image, which is 
-        always of the same shape as ``ccd``.
-
-    exptime : str or scalar
-        Exposure time. Should be either a keyword in the header (str) or exposure time 
-        itself (scalar).
-
-    airmass : str or scalar
-        Airmass. Should be either a keyword in the header (str) or airmass itself 
-        (scalar).
-
-    extinct : str, `~specutils.Spectrum1D` or `None`
-        Extinction curve. Should be either a file name (str) or the extinction curve 
-        itself (`~specutils.Spectrum1D`) if not `None`.
-
-    sens1d : `~specutils.Spectrum1D` or `~numpy.ndarray`
-        Sensitivity function.
-
-    use_uncertainty : bool, optional
-        If `True`, the uncertainty array attributed to ``sens1d`` is propagated.
-        Default is `False`.
-
-    Returns
-    -------
-    calibrated_ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Calibrated 2-dimensional spectrum.
-    """
-    
-    _validateString(slit_along, 'slit_along', ['col', 'row'])
-    
-    if slit_along == 'col':
-        nccd, data_arr, uncertainty_arr, _ = _validateCCD(
-            ccd, 'ccd', True, False, False)
-    else:
-        nccd, data_arr, uncertainty_arr, _ = _validateCCD(
-            ccd, 'ccd', True, False, True)
-
-    if data_arr.ndim == 1:
-        shape = []
-    else:
-        shape = data_arr.shape[:-1]
-
-    _validateBool(use_uncertainty, 'use_uncertainty')
-
-    wavelength, bin_width, sens, uncertainty_sens, meta_sens = _calibrate(
-        sens1d, airmass, extinct, shape, use_uncertainty)
-
-    # Unit conversion
-    if isinstance(exptime, str):
-        exptime = nccd.header[exptime] * u.s
-
-    flux_obs = (data_arr * nccd.unit) / (exptime * bin_width) # [counts/s/Angstrom]
-    uncertainty_obs = StdDevUncertainty(
-        uncertainty_arr / (exptime.value * bin_width.value))
-
-    if slit_along == 'col':
-
-        sccd = CCDData(
-            data=sens, uncertainty=uncertainty_sens, header=meta_sens['header'])
-
-        nccd = CCDData(
-            data=flux_obs, uncertainty=uncertainty_obs, mask=nccd.mask, 
-            header=nccd.header)
-    else:
-
-        sccd = CCDData(
-            data=sens.T, uncertainty=StdDevUncertainty(uncertainty_sens.array.T), 
-            header=meta_sens['header'])
-
-        nccd = CCDData(
-            data=flux_obs.T, uncertainty=StdDevUncertainty(uncertainty_obs.array.T), 
-            mask=nccd.mask, header=nccd.header)
-
-    # Calibrate
-    calibrated_ccd = flat_correct(ccd=nccd, flat=sccd, norm_value=1)
-
-    # Output
-    if nccd.uncertainty is None:
-        calibrated_ccd.uncertainty = None
-
-    if isinstance(ccd, CCDData):
-        # Add headers here
-        calibrated_ccd.header['EXPTIME'] = exptime.value
-        calibrated_ccd.header['AIRMASS'] = sccd.header['AIRMASS']
-        calibrated_ccd.header['CALIBRAT'] = '{} Calibrated'.format(
-            Time.now().to_value('iso', subfmt='date_hm'))
-
-    elif np.ma.isMaskedArray(ccd):
-        calibrated_ccd = np.ma.array(calibrated_ccd.data, mask=calibrated_ccd.mask)
-
-    else:
-        calibrated_ccd = deepcopy(calibrated_ccd.data)
-
-    return calibrated_ccd

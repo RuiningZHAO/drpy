@@ -15,6 +15,7 @@ from specutils import Spectrum1D
 from drpsy import conf
 
 # Configuration
+unit_ccddata = u.Unit(conf.unit_ccddata)
 unit_spectral_axis = u.Unit(conf.unit_spectral_axis)
 unit_flux = u.Unit(conf.unit_flux)
 
@@ -180,12 +181,12 @@ def _validateCCDData(ccd, name):
 
     if not isinstance(ccd, (np.ndarray, CCDData)):
         raise TypeError('Invalid type `{}` for ``{}``.'.format(type(ccd), name))
-
+    # May have (or not have) uncertainty frame or mask frame.
     elif isinstance(ccd, CCDData):
         nccd = ccd.copy()
-
+    # Do not have uncertainty frame. May have (or not have) mask frame.
     else:
-        nccd = CCDData(deepcopy(ccd), unit='adu')
+        nccd = CCDData(deepcopy(ccd), unit=unit_ccddata)
 
     return nccd
 
@@ -200,21 +201,20 @@ def _validateSpectrum1D(spectrum, name):
         new_spectrum = deepcopy(spectrum)
     
     else:
-        n_dim = np.ndim(spectrum)
 
-        if n_dim == 1:
+        if spectrum.ndim == 1:
 
             if np.ma.isMaskedArray(spectrum):
-                flux = spectrum.data * u.unit_flux
+                flux = spectrum.data * unit_flux
                 mask = spectrum.mask
 
             else:
-                flux = spectrum * u.unit_flux
+                flux = spectrum * unit_flux
                 mask = None
 
             new_spectrum = Spectrum1D(flux=flux, mask=mask)
 
-        elif n_dim == 2:
+        elif spectrum.ndim == 2:
 
             n_spec = spectrum.shape[0]
 
@@ -222,38 +222,44 @@ def _validateSpectrum1D(spectrum, name):
 
                 mask = spectrum.mask[:3].any(axis=0)
 
+                # flux
                 if n_spec == 1:
                     spectral_axis = np.arange(spectrum.shape[1]) * unit_spectral_axis
-                    flux = spectrum.data[0] * u.unit_flux
+                    flux = spectrum.data[0] * unit_flux
                     uncertainty = None
 
+                # spectral axis, flux
                 elif n_spec == 2:
                     spectral_axis = spectrum.data[0] * unit_spectral_axis
-                    flux = spectrum.data[1] * u.unit_flux
+                    flux = spectrum.data[1] * unit_flux
                     uncertainty = None
 
+                # spectral axis, flux, uncertainty
                 else:
                     spectral_axis = spectrum.data[0] * unit_spectral_axis
-                    flux = spectrum.data[1] * u.unit_flux
+                    flux = spectrum.data[1] * unit_flux
                     uncertainty = StdDevUncertainty(spectrum.data[2])
 
             else:
 
                 mask = None
 
+                # flux
                 if n_spec == 1:
                     spectral_axis = np.arange(spectrum.shape[1]) * unit_spectral_axis
-                    flux = spectrum[0] * u.unit_flux
+                    flux = spectrum[0] * unit_flux
                     uncertainty = None
 
+                # spectral axis, flux
                 elif n_spec == 2:
                     spectral_axis = spectrum[0] * unit_spectral_axis
-                    flux = spectrum[1] * u.unit_flux
+                    flux = spectrum[1] * unit_flux
                     uncertainty = None
 
+                # spectral axis, flux, uncertainty
                 else:
                     spectral_axis = spectrum[0] * unit_spectral_axis
-                    flux = spectrum[1] * u.unit_flux
+                    flux = spectrum[1] * unit_flux
                     uncertainty = StdDevUncertainty(spectrum[2])
 
             new_spectrum = Spectrum1D(

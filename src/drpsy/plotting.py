@@ -8,6 +8,8 @@ from matplotlib import gridspec
 import matplotlib.pyplot as plt
 # AstroPy
 from astropy.visualization import ZScaleInterval
+# drpsy
+from drpsy import conf
 
 from .validate import (_validateBool, _validatePath, _validateRange, _validateString, 
                        _validateSpectrum)
@@ -23,7 +25,7 @@ __all__ = ['plotFitting', 'plotSpectrum1D', 'plot2d']
 # todo: add _plotFitting?
 def plotFitting(x, y, residual, mask, y_fit, x_fit=None, threshold_lower=None, 
                 threshold_upper=None, xlabel='x', ylabel='y', title='fitting', 
-                show=True, save=False, path=None, use_relative=False):
+                show=conf.show, save=conf.save, path=conf.path, use_relative=False):
     """Plot fitting.
 
     Parameters
@@ -163,7 +165,8 @@ def _plotSpectrum1D(ax, spectral_axis, flux, uncertainty=None, xlabel='spectral 
     ax.set_ylabel(ylabel, fontsize=16)
     
 # todo: add mask, add legend?
-def plotSpectrum1D(spectrum1d, title='spectrum', show=True, save=False, path=None):
+def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save, 
+                   path=conf.path):
     """Plot 1-dimensional spectrum of type `~specutils.Spectrum1D`.
     
     Parameters
@@ -245,7 +248,7 @@ def _plot2d(ax, ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column',
 
 
 def plot2d(ccd, cmap='Greys_r', contrast=0.25, extent=None, cbar=True, title='image', 
-           show=True, save=False, path=None, **kwargs):
+           show=conf.show, save=conf.save, path=conf.path, **kwargs):
     """Plot image.
 
     Parameters
