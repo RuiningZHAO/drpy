@@ -16,8 +16,8 @@ from astropy.nddata import StdDevUncertainty
 # specutils
 from specutils import Spectrum1D
 
-from ..modeling.function import Gaussian1D
-from ..validate import _validateSpectrum1D
+from drpsy.modeling.function import Gaussian1D
+from drpsy.validate import _validateSpectrum1D
 
 __all__ = ['center1D', 'refinePeakBases', 'refinePeaks', 'loadSpectrum1D', 
            'loadStandardSpectrum']

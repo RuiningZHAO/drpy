@@ -3,7 +3,6 @@ import warnings
 # NumPy
 import numpy as np
 # SciPy
-from scipy import interpolate
 from scipy.optimize import curve_fit, OptimizeWarning
 # matplotlib
 import matplotlib.pyplot as plt
@@ -16,16 +15,17 @@ from photutils.background import Background2D
 from photutils.centroids import centroid_com
 from photutils.detection import find_peaks
 
-from ..modeling.function import CircularGaussian
-from ..plotting import _plot2d
-from ..validate import (_validateString, _validateBool, _validateRange, 
-                        _validateInteger, _validateCCD, _validatePath)
+from drpsy import conf
+from drpsy.modeling.function import CircularGaussian
+from drpsy.plotting import _plot2d
+from drpsy.validate import (_validateString, _validateBool, _validateRange, 
+                            _validateInteger, _validateCCD, _validatePath)
 
 __all__ = ['getFWHM']
 
 # todo: deal with NaNs in Gaussian fitting.
 def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, use_mask=False, 
-            title='FWHM', show=True, save=False, path=None, **kwargs):
+            title='FWHM', show=conf.show, save=conf.save, path=conf.path, **kwargs):
     """Estimate mean FWHM of the sources in the input image.
 
     The background of the input image is first modeled by a 2-dimensional background 

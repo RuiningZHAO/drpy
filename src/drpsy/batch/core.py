@@ -1,12 +1,8 @@
+import os, textwrap, warnings
 from copy import deepcopy
-import os
-import textwrap
-import warnings
 
 # NumPy
 import numpy as np
-# SciPy
-from scipy import ndimage, interpolate
 # AstroPy
 import astropy.units as u
 from astropy.time import Time
@@ -14,20 +10,22 @@ from astropy.nddata import CCDData
 # ccdproc
 from ccdproc import (trim_image, combine, subtract_bias, create_deviation, 
                      flat_correct, cosmicray_lacosmic, cosmicray_median)
+# drpsy
+from drpsy import conf
+from drpsy.utils import imstatistics
+from drpsy.validate import _validateBool, _validateString
 
-from .utils import imstatistics
-from .validate import (_validateBool, _validateString, _validate1DArray, 
-                       _validateNDArray, _validateCCDList, _validateCCDData)
+# Configurations
+unit_ccddata = u.Unit(conf.unit_ccddata)
 
-__all__ = ['CCDDataList', 'concatenate', 'transform']
+__all__ = ['CCDDataList']
 
 
 class CCDDataList:
-    """CCDDataList"""
-
+    """A class for batch processing."""
 
     @classmethod
-    def read(cls, file_list, hdu=1, unit=u.adu):
+    def read(cls, file_list, hdu=1, unit=unit_ccddata):
         """Construct a `CCDDataList` object from a list of files.
         
         Parameters
@@ -48,6 +46,8 @@ class CCDDataList:
         ccddatalist : `CCDDataList`
             Constructed `CCDDataList` object.
         """
+        
+        print(unit)
 
         ccddatalist = list()
         for file_name in file_list:
@@ -436,192 +436,3 @@ class CCDDataList:
 
     def __iter__(self):
         return iter(self._ccddatalist)
-
-
-def concatenate(ccdlist, row_range, col_range, scale=None):
-    """Concatenate two frames.
-    
-    The region defined by ``row_range`` and ``col_range`` in the second frame is 
-    replaced by that in the first frame. Usually this is used to concatenate 
-    flat-fields or arc spectra of different exposure times. To concatenate multiple 
-    frames, call this function repeatedly.
-
-    Parameters
-    ----------
-    ccdlist : Iterable
-        Iterable object containing two 2-dimensional frames.
-
-    row_range : array_like
-        Row range (python style).
-
-    col_range : array_like
-        Column range (python style).
-    
-    scale : scalar, array-like or `None`, optional
-        Scaling factor. Frames are multiplied by scaling factor prior to concatenation.
-        Default is `None`.
-
-    Returns
-    -------
-    nccd : `~astropy.nddata.CCDData`
-        The concatenated frame.
-    """
-
-    ccdlist = _validateCCDList(ccdlist, 2, 2)
-    n_image = len(ccdlist)
-    if n_image > 2:
-        warnings.warn(
-            '``ccdlist`` contains more than two frames. Extra frames will be ignored.', 
-            RuntimeWarning)
-
-    row_start, row_end = row_range
-    col_start, col_end = col_range
-
-    if scale is None:
-        scale = _validate1DArray(1, 'scale', 2, True)
-    else:
-        scale = _validate1DArray(scale, 'scale', 2, True)
-
-    data_arr = ccdlist[1].data * scale[1]
-    data_arr[row_start:row_end, col_start:col_end] = (
-        ccdlist[0].data[row_start:row_end, col_start:col_end] * scale[0]
-    )
-
-    if (ccdlist[0].uncertainty is None) | (ccdlist[1].uncertainty is None):
-        uncertainty_arr = None
-    else:
-        uncertainty_arr = scale[1] * ccdlist[1].uncertainty.array
-        uncertainty_arr[row_start:row_end, col_start:col_end] = (
-            ccdlist[0].uncertainty.array[row_start:row_end, col_start:col_end] 
-            * scale[0]
-        )
-
-    if (ccdlist[0].mask is None) | (ccdlist[1].mask is None):
-        mask_arr = None
-    else:
-        mask_arr = deepcopy(ccdlist[1].mask)
-        mask_arr[row_start:row_end, col_start:col_end] = (
-            ccdlist[0].mask[row_start:row_end, col_start:col_end])
-
-    nccd = ccdlist[0].copy()
-
-    nccd.data = data_arr
-
-    if uncertainty_arr is None:
-        nccd.uncertainty = None
-    else:
-        # Here ``nccd.uncertainty`` is definitely not `None`.
-        nccd.uncertainty.array = uncertainty_arr
-
-    nccd.mask = mask_arr
-
-    nccd.header['CONCATEN'] = (
-        '{} Data section [{}:{}, {}:{}] is from the first frame.'.format(
-            Time.now().to_value('iso', subfmt='date_hm'), (col_start + 1), col_end, 
-            (row_start + 1), row_end)
-    )
-
-    return nccd
-
-# todo: description. check Delaunay method for uncertainty estimation.
-def transform(ccd, X, Y, flux=True):
-    """Transform input image to a new coordinate.
-    
-    [description]
-
-    Parameters
-    ----------
-    ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Input image.
-    
-    X, Y : `~numpy.ndarray`
-        X(U, V), Y(U, V)
-    
-    flux : bool, optional
-        If `True` the interpolated output pixel value is multiplied by the Jacobean of 
-        the transformation (essentially the ratio of pixel areas between the input and 
-        output images).
-    
-    Returns
-    -------
-    nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        The transformed image.
-    """
-
-    nccd = _validateCCDData(ccd, 'ccd')
-    
-    data_arr = deepcopy(nccd.data)
-
-    n_row, n_col = data_arr.shape
-    
-    idx_row, idx_col = np.arange(n_row), np.arange(n_col)
-
-    _validateNDArray(X, 'X', 2)
-    _validateNDArray(Y, 'Y', 2)
-    if not (data_arr.shape == X.shape == Y.shape):
-        raise ValueError(
-            'The input image and the coordinate arrays should have the same shape.')
-
-    _validateBool(flux, 'flux')
-
-    # Flux conservation consists of multiplying the interpolated pixel value by the 
-    # Jacobean of the transformation at that point. This is essentially the ratio of 
-    # the pixel areas between the input and output images. (for details see 
-    # https://iraf.net/irafhelp.php?val=longslit.transform&help=Help+Page)
-    if flux:
-        x = (idx_col[1:] + idx_col[:-1]) / 2
-        a1 = interpolate.interp1d(
-            x, np.diff(X, axis=1), axis=1, bounds_error=False, fill_value='extrapolate', 
-            assume_sorted=True)(idx_col)
-        y = (idx_row[1:] + idx_row[:-1]) / 2
-        a2 = interpolate.interp1d(
-            y, np.diff(Y, axis=0), axis=0, bounds_error=False, fill_value='extrapolate', 
-            assume_sorted=True)(idx_row)
-        S = a1 * a2
-
-    else:
-        S = 1.
-
-    # Data
-    data_arr_transformed = ndimage.map_coordinates(
-        input=data_arr, coordinates=(Y, X), order=1, mode='nearest')
-    data_arr_transformed *= S
-    nccd.data = deepcopy(data_arr_transformed)
-
-    # Uncertainty
-    # This method is simple but enlarges the resulting uncertainty.
-    if nccd.uncertainty is not None:
-        uncertainty_arr = deepcopy(nccd.uncertainty.array)
-        uncertainty_arr_transformed = np.sqrt(
-            ndimage.map_coordinates(
-                input=uncertainty_arr**2, coordinates=(Y, X), order=1, mode='nearest')
-        )
-        uncertainty_arr_transformed *= S
-        nccd.uncertainty.array = deepcopy(uncertainty_arr_transformed)
-
-    # Mask
-    if nccd.mask is not None:
-        mask_arr = nccd.mask.astype(float)
-        mask_arr_transformed = ndimage.map_coordinates(
-            input=mask_arr, coordinates=(Y, X), order=1, mode='constant', cval=1.)
-        # Any interpolated value of 0.1 or greater is given the value 1 in the output 
-        # mask. The choice of 0.1 is purely empirical and gives an approximate 
-        # identification of significant affected pixels. (for details see 
-        # https://iraf.net/irafhelp.php?val=longslit.transform&help=Help+Page)
-        threshold = 0.1
-        mask_arr_transformed[mask_arr_transformed >= threshold] = 1.
-        mask_arr_transformed = np.round(mask_arr_transformed).astype(bool)
-        nccd.mask = deepcopy(mask_arr_transformed)
-
-    # Output
-    if isinstance(ccd, CCDData):
-        nccd.header['TRANSFOR'] = '{} Transformed.'.format(
-            Time.now().to_value('iso', subfmt='date_hm'))
-
-    elif np.ma.isMaskedArray(ccd):
-        nccd = np.ma.array(nccd.data, mask=nccd.mask)
-
-    else:
-        nccd = deepcopy(nccd.data)
-
-    return nccd

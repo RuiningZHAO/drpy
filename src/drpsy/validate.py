@@ -7,17 +7,22 @@ import warnings
 # NumPy
 import numpy as np
 # AstroPy
+import astropy.units as u
 from astropy.nddata import CCDData, StdDevUncertainty
 # specutils
 from specutils import Spectrum1D
+
+from drpsy import conf
+
+# Configuration
+unit_spectral_axis = u.Unit(conf.unit_spectral_axis)
+unit_flux = u.Unit(conf.unit_flux)
 
 __all__ = ['_validateBool', '_validateString', '_validateRange', '_validateInteger', 
            '_validateLength', '_validate1DArray', '_validateNDArray', 
            '_validateCCDData', '_validateSpectrum1D', '_validateCCDList', 
            '_validateCCD', '_validateSpectrum', '_validateBins', '_validateAperture', 
            '_validatePath']
-
-
 # Types
 
 def _validateBool(arg, name):
@@ -200,11 +205,11 @@ def _validateSpectrum1D(spectrum, name):
         if n_dim == 1:
 
             if np.ma.isMaskedArray(spectrum):
-                flux = spectrum.data * u.count
+                flux = spectrum.data * u.unit_flux
                 mask = spectrum.mask
 
             else:
-                flux = spectrum * u.count
+                flux = spectrum * u.unit_flux
                 mask = None
 
             new_spectrum = Spectrum1D(flux=flux, mask=mask)
@@ -218,18 +223,18 @@ def _validateSpectrum1D(spectrum, name):
                 mask = spectrum.mask[:3].any(axis=0)
 
                 if n_spec == 1:
-                    spectral_axis = np.arange(spectrum.shape[1]) * u.pixel
-                    flux = spectrum.data[0] * u.count
+                    spectral_axis = np.arange(spectrum.shape[1]) * unit_spectral_axis
+                    flux = spectrum.data[0] * u.unit_flux
                     uncertainty = None
 
                 elif n_spec == 2:
-                    spectral_axis = spectrum.data[0] * u.pixel
-                    flux = spectrum.data[1] * u.count
+                    spectral_axis = spectrum.data[0] * unit_spectral_axis
+                    flux = spectrum.data[1] * u.unit_flux
                     uncertainty = None
 
                 else:
-                    spectral_axis = spectrum.data[0] * u.pixel
-                    flux = spectrum.data[1] * u.count
+                    spectral_axis = spectrum.data[0] * unit_spectral_axis
+                    flux = spectrum.data[1] * u.unit_flux
                     uncertainty = StdDevUncertainty(spectrum.data[2])
 
             else:
@@ -237,18 +242,18 @@ def _validateSpectrum1D(spectrum, name):
                 mask = None
 
                 if n_spec == 1:
-                    spectral_axis = np.arange(spectrum.shape[1]) * u.pixel
-                    flux = spectrum[0] * u.count
+                    spectral_axis = np.arange(spectrum.shape[1]) * unit_spectral_axis
+                    flux = spectrum[0] * u.unit_flux
                     uncertainty = None
 
                 elif n_spec == 2:
-                    spectral_axis = spectrum[0] * u.pixel
-                    flux = spectrum[1] * u.count
+                    spectral_axis = spectrum[0] * unit_spectral_axis
+                    flux = spectrum[1] * u.unit_flux
                     uncertainty = None
 
                 else:
-                    spectral_axis = spectrum[0] * u.pixel
-                    flux = spectrum[1] * u.count
+                    spectral_axis = spectrum[0] * unit_spectral_axis
+                    flux = spectrum[1] * u.unit_flux
                     uncertainty = StdDevUncertainty(spectrum[2])
 
             new_spectrum = Spectrum1D(

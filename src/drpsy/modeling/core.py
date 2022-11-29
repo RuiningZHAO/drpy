@@ -6,7 +6,7 @@ from astropy.stats import sigma_clip
 from scipy import interpolate
 from scipy.ndimage import gaussian_filter
 
-from ..validate import _validateBool, _validateInteger, _validate1DArray
+from drpsy.validate import _validateBool, _validateInteger, _validate1DArray
 
 __all__ = ['Poly1D', 'Spline1D', 'Spline2D', 'GaussianSmoothing2D']
 

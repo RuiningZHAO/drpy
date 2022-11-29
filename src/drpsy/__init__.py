@@ -1,11 +1,12 @@
 """
-drpsy: a data reduction toolbox for astronomical photometry and spectroscopy
+drpsy: a data reduction toolkit for astronomical photometry and spectroscopy
 """
 
 import os
 
 from astropy import config as _config
-from .core import CCDDataList, concatenate, transform
+
+__all__ = ['__version__', 'conf']
 
 __version__ = '0.0.3.1'
 
@@ -33,4 +34,4 @@ class Conf(_config.ConfigNamespace):
 
 conf = Conf()
 
-__all__ = ['CCDDataList', 'concatenate', 'transform', '__version__', 'conf']
+del _config
