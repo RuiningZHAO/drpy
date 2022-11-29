@@ -24,13 +24,13 @@ from ccdproc import flat_correct
 # specutils
 from specutils import Spectrum1D
 
-from ..core import CCDDataList
-from ..modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
-from ..plotting import plotFitting, _plot2d, _plotSpectrum1D
-from ..validate import (_validateBool, _validateString, _validateRange, 
-                        _validateInteger, _validate1DArray, _validateCCDList, 
-                        _validateCCD, _validateSpectrum, _validateBins, 
-                        _validateAperture, _validatePath)
+from drpsy import CCDDataList, conf
+from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
+from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
+from drpsy.validate import (_validateBool, _validateString, _validateRange, 
+                            _validateInteger, _validate1DArray, _validateCCDList, 
+                            _validateCCD, _validateSpectrum, _validateBins, 
+                            _validateAperture, _validatePath)
 from .utils import (_center1D_Gaussian, _refinePeakBases, _refinePeaks, loadSpectrum1D, 
                     loadStandardSpectrum, loadExtinctionCurve)
 
@@ -42,6 +42,7 @@ plt.rcParams['font.family'] = 'STIXGeneral'
 __all__ = ['response', 'illumination', 'align', 'fitcoords', 'dispcor', 'trace', 
            'background', 'extract', 'sensfunc']
 
+print(conf.unit_ccddata, conf.unit_spectral_axis, conf.unit_flux, conf.show, conf.save, conf.path)
 
 def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, 
              grow=False, use_mask=False, title='response', show=True, save=False, 

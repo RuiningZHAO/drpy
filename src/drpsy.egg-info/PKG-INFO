@@ -13,7 +13,13 @@ Description-Content-Type: text/markdown
 License-File: LICENSE
 
 # drpsy
-A **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
+drpsy (pronounced "doctor psi") is a **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
+
+## Installation
+
+```
+pip install drpsy
+```
 
 ## Note
 
