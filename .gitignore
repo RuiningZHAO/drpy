@@ -1,3 +1,4 @@
 # .gitignore
 bak
 tests/data
+.venv
