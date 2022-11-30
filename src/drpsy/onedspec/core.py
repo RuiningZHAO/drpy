@@ -533,65 +533,6 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
     return sens1d
 
 
-def _calibrate(sens1d, airmass, extinct, shape, use_uncertainty):
-    """Apply a flux calibration"""
-
-    new_sens1d, _, sens, uncertainty, _ = _validateSpectrum(
-        sens1d, 'sens1d', use_uncertainty, False)
-
-    # ``sens``, ``uncertainty`` and ``mask_sens`` should be 1-dimensional arrays. 
-    # Use flatten to get rid of additional dimensions.
-    if sens.ndim > 1:
-        sens = sens.flatten()[:sens.shape[-1]]
-        uncertainty = uncertainty.flatten()[:uncertainty.shape[-1]]
-
-    wavelength = deepcopy(new_sens1d.wavelength)
-    bin_width = np.abs(np.diff(new_sens1d.bin_edges.to(u.AA)))
-
-    # Extinction curve
-    if extinct is not None:
-
-        if isinstance(airmass, str):
-            airmass = spectrum1d.meta['header'][airmass]
-
-        if isinstance(extinct, str):
-            spectrum_ext = loadExtinctionCurve(extinct)
-
-        elif isinstance(extinct, Spectrum1D):
-            spectrum_ext = deepcopy(extinct)
-
-        else:
-            raise TypeError(
-                '``extinct`` should be either a file name of a extinction curve or a '
-                '`~specutils.Spectrum1D` object if not `None`.')
-
-        wavelength_ext = spectrum_ext.wavelength.value
-        extinction = spectrum_ext.flux.value
-
-        extinction = interpolate.interp1d(
-            x=wavelength_ext, y=extinction, kind='quadratic', bounds_error=False, 
-            fill_value='extrapolate', assume_sorted=True)(wavelength.value)
-
-        sens -= (airmass * extinction)
-
-    sens = 10**(0.4 * sens)
-    uncertainty *= 0.4 * np.log(10) * sens
-
-    shape = np.hstack([shape, 1])
-
-    sens = np.tile(sens, shape) * new_sens1d.flux.unit
-    uncertainty = StdDevUncertainty(np.tile(uncertainty, shape))
-
-    if 'header' in sens1d.meta:
-        meta = deepcopy(sens1d.meta)
-    else:
-        meta = {'header': dict()}
-    # Add headers here
-    meta['header']['AIRMASS'] = airmass
-
-    return wavelength, bin_width, sens, uncertainty, meta
-
-# todo: uncertainty
 def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=False):
     """Apply a flux calibration to 1-dimensional spectra.
     
@@ -632,20 +573,13 @@ def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=F
     new_spectrum1d, _, _, _, _ = _validateSpectrum(
         spectrum1d, 'spectrum1d', False, False)
 
-    if new_spectrum1d.flux.ndim == 1:
-        shape = []
-    else:
-        shape = new_spectrum1d.flux.shape[:-1]
-
-    _validateBool(use_uncertainty, 'use_uncertainty')
-
-    wavelength, bin_width, sens, uncertainty_sens, meta_sens = _calibrate(
-        sens1d, airmass, extinct, shape, use_uncertainty)
+    wavelength_obs = new_spectrum1d.wavelength                     # [Angstrom]
+    bin_width = np.abs(np.diff(new_spectrum1d.bin_edges.to(u.AA))) # [Angstrom]
 
     if isinstance(exptime, str):
         exptime = spectrum1d.meta['header'][exptime] * u.s
 
-    flux_obs = new_spectrum1d.flux / (exptime * bin_width) # [counts/s/Angstrom]
+    flux_obs = new_spectrum1d.flux.value / (exptime * bin_width) # [counts/s/Angstrom]
 
     if new_spectrum1d.uncertainty is not None:
         uncertainty_obs = StdDevUncertainty(
@@ -653,13 +587,60 @@ def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=F
     else:
         uncertainty_obs = None
 
-    new_sens1d = Spectrum1D(
-        spectral_axis=wavelength, flux=sens, uncertainty=uncertainty_sens, 
-        meta=meta_sens)
-
     new_spectrum1d = Spectrum1D(
-        spectral_axis=wavelength, flux=flux_obs, uncertainty=uncertainty_obs, 
+        spectral_axis=wavelength_obs, flux=flux_obs, uncertainty=uncertainty_obs, 
         mask=new_spectrum1d.mask, meta=new_spectrum1d.meta)
+
+    _validateBool(use_uncertainty, 'use_uncertainty')
+
+    new_sens1d, _, sens, uncertainty_sens, _ = _validateSpectrum(
+        sens1d, 'sens1d', use_uncertainty, False)
+
+    wavelength_sens = new_sens1d.wavelength.value # [Angstrom]
+
+    # ``wavelength_sens`` is dimensionless
+    if not (wavelength_obs.value == wavelength_sens).all():
+        raise ValueError(
+            'The spectral axes of ``spectrum1d`` and ``sens1d`` should be the same.')
+
+    # ``sens``, ``uncertainty_sens`` should be 1-dimensional arrays. 
+    # Use flatten to get rid of additional dimensions.
+    if sens.ndim > 1:
+        sens = sens.flatten()[:sens.shape[-1]]
+        uncertainty_sens = uncertainty_sens.flatten()[:uncertainty_sens.shape[-1]]
+
+    # Extinction curve
+    if extinct is not None:
+
+        if isinstance(airmass, str):
+            airmass = spectrum1d.meta['header'][airmass]
+
+        if isinstance(extinct, str):
+            spectrum_ext = loadExtinctionCurve(extinct)
+
+        elif isinstance(extinct, Spectrum1D):
+            spectrum_ext = deepcopy(extinct)
+
+        else:
+            raise TypeError(
+                '``extinct`` should be either a file name of a extinction curve or a '
+                '`~specutils.Spectrum1D` object if not `None`.')
+
+        wavelength_ext = spectrum_ext.wavelength.value
+        extinction = spectrum_ext.flux.value
+
+        extinction = interpolate.interp1d(
+            x=wavelength_ext, y=extinction, kind='quadratic', bounds_error=False, 
+            fill_value='extrapolate', assume_sorted=True)(wavelength_sens)
+
+        sens -= (airmass * extinction)
+
+    sens = 10**(0.4 * sens)                 # [counts / (erg / cm2)]
+    uncertainty_sens *= 0.4 * np.log(10) * sens  # [counts / (erg / cm2)]
+
+    new_sens1d = Spectrum1D(
+        spectral_axis=(wavelength_sens * u.AA), flux=(sens * new_sens1d.flux.unit), 
+        uncertainty=StdDevUncertainty(uncertainty_sens), meta=new_sens1d.meta)
 
     # Calibrate
     calibrated_spectrum1d = new_spectrum1d / new_sens1d
@@ -673,8 +654,8 @@ def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=F
     else:
         meta = {'header': dict()}
     # Add headers here
-    meta['header']['EXPTIME'] = exptime.value
-    meta['header']['AIRMASS'] = new_sens1d.meta['header']['AIRMASS']
+    meta['header']['EXPTIME'] = exptime
+    meta['header']['AIRMASS'] = airmass
     meta['header']['CALIBRAT'] = '{} Calibrated'.format(
         Time.now().to_value('iso', subfmt='date_hm'))
 
