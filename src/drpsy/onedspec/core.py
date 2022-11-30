@@ -12,19 +12,16 @@ from matplotlib.collections import PatchCollection
 import astropy.units as u
 from astropy.time import Time
 from astropy.table import Table
-from astropy.nddata import CCDData, StdDevUncertainty
-# ccdproc
-from ccdproc import flat_correct
+from astropy.nddata import StdDevUncertainty
 # specutils
 from specutils import Spectrum1D
-
-from drpsy import CCDDataList, conf
+# drpsy
+from drpsy import conf
 from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
 from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
-from drpsy.validate import (_validateBool, _validateString, _validateRange, 
-                            _validateInteger, _validate1DArray, _validateCCDList, 
-                            _validateCCD, _validateSpectrum, _validateBins, 
-                            _validateAperture, _validatePath)
+from drpsy.validate import (_validateBool, _validateString, _validateSpectrum, 
+                            _validatePath)
+
 from .utils import (_center1D_Gaussian, _refinePeakBases, _refinePeaks, loadSpectrum1D, 
                     loadStandardSpectrum, loadExtinctionCurve)
 
@@ -42,8 +39,8 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
         Input spectrum.
 
     reverse : bool
-        Reverse the input spectrum or not. Set to `True` if the input spectrum is in 
-        the reverse order with respect to the reference spectrum.
+        Reverse the input spectrum or not. Set to `True` if the spectral axis of the 
+        input spectrum is in reverse order.
 
     file_name : str
         File name of the reference spectrum.
@@ -73,7 +70,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
 
     # ``flux`` and ``mask`` may be 2-dimensional arrays, though each one may only have 
     # one row. Use flatten to get rid of the additional dimension.
-    if np.ndim(flux) > 1:
+    if flux.ndim > 1:
         flux = flux.flatten()[:flux.shape[-1]]
         mask = mask.flatten()[:mask.shape[-1]]
 
@@ -93,7 +90,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
 
     spectrum1d_ref = loadSpectrum1D(file_name, ext='spec')
     spectral_axis_ref = spectrum1d_ref.spectral_axis.value
-    spectral_axis_unit = spectrum1d_ref.spectral_axis.unit.to_string('fits')
+    unit_spectral_axis = spectrum1d_ref.spectral_axis.unit
     flux_ref = spectrum1d_ref.flux.value
     index_ref = np.arange(spectral_axis_ref.shape[0])
 
@@ -166,7 +163,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
             x=spectral_axis_peaks, y=refined_peaks, residual=residual, 
             mask=master_mask, x_fit=spectral_axis, y_fit=index, 
             threshold_lower=threshold_lower, threshold_upper=threshold_upper, 
-            xlabel=f'spectral axis [{spectral_axis_unit}]', 
+            xlabel=f'spectral axis [{unit_spectral_axis.to_string()}]', 
             ylabel='dispersion axis [px]', title='dispersion solution', show=show, 
             save=save, path=path, use_relative=False)
 
@@ -180,8 +177,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
 
     if show | save:
 
-        xlabel = 'spectral axis [{}]'.format(
-            spectrum1d_ref.spectral_axis.unit.to_string('fits'))
+        xlabel = f'spectral axis [{unit_spectral_axis.to_string()}]'
 
         fig = plt.figure(figsize=(8, 4), dpi=100)
         ax = fig.add_subplot(1, 1, 1)
@@ -197,7 +193,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
         ax.tick_params(
             which='major', direction='in', top=True, right=True, length=5, width=1.5, 
             labelsize=12)
-        ax.set_xlabel(f'spectral axis [{spectral_axis_unit}]', fontsize=16)
+        ax.set_xlabel(xlabel, fontsize=16)
         ax.set_ylabel('flux', fontsize=16)
         ax.legend(fontsize=16)
         ax.set_title(title, fontsize=16)
@@ -212,10 +208,11 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
     if reverse:
         spectral_axis = spectral_axis[::-1]
 
-    spectral_axis *= spectrum1d_ref.spectral_axis.unit
+    spectral_axis *= unit_spectral_axis
 
     if 'header' in new_spectrum1d.meta:
         meta = deepcopy(new_spectrum1d.meta)
+
     else:
         meta = {'header': dict()}
 
@@ -258,7 +255,7 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
         Standard spectrum. Should be either a file name (str) in the libaray or the 
         standard spectrum itself (`~specutils.Spectrum1D`).
 
-    bandwid, bandsep : scalar or `None`
+    bandwid, bandsep : scalar or `None`, optional
         Bandpass widths and separations in wavelength units.
 
     n_piece : int, optional
@@ -425,7 +422,7 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
     
         flux_bp_obs[i] /= (bandpass[1] - bandpass[0])
 
-    # Negative values lead to NaN here
+    # Negative values lead to NaNs here
     sens = 2.5 * np.log10(flux_bp_obs / flux_bp_lib) # 2.5 x log10(counts / (erg / cm2))
 
     # Extinction curve

@@ -20,14 +20,13 @@ from specutils import Spectrum1D
 
 from drpsy import conf
 from drpsy.batch import CCDDataList
+from drpsy.onedspec.utils import _center1D_Gaussian, _refinePeakBases, _refinePeaks
 from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
 from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
 from drpsy.validate import (_validateBool, _validateString, _validateRange, 
                             _validateInteger, _validate1DArray, _validateCCDList, 
                             _validateCCD, _validateBins, _validateAperture, 
                             _validatePath)
-
-from .utils import _center1D_Gaussian, _refinePeakBases, _refinePeaks
 
 # Set plot parameters
 plt.rcParams['axes.linewidth'] = 1.5

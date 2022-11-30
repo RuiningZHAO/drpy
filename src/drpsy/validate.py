@@ -1,8 +1,6 @@
+import operator, os, warnings
 from collections.abc import Iterable
 from copy import deepcopy
-import operator
-import os
-import warnings
 
 # NumPy
 import numpy as np
@@ -11,10 +9,10 @@ import astropy.units as u
 from astropy.nddata import CCDData, StdDevUncertainty
 # specutils
 from specutils import Spectrum1D
-
+# drpsy
 from drpsy import conf
 
-# Configuration
+# Configurations
 unit_ccddata = u.Unit(conf.unit_ccddata)
 unit_spectral_axis = u.Unit(conf.unit_spectral_axis)
 unit_flux = u.Unit(conf.unit_flux)
