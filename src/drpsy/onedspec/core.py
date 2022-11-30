@@ -654,7 +654,7 @@ def calibrate1d(spectrum1d, exptime, airmass, extinct, sens1d, use_uncertainty=F
     else:
         meta = {'header': dict()}
     # Add headers here
-    meta['header']['EXPTIME'] = exptime
+    meta['header']['EXPTIME'] = exptime.value
     meta['header']['AIRMASS'] = airmass
     meta['header']['CALIBRAT'] = '{} Calibrated'.format(
         Time.now().to_value('iso', subfmt='date_hm'))

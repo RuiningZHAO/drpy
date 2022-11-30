@@ -12,9 +12,9 @@ __all__ = ['invertCoordinateMap']
 # todo: deal with griddata
 def invertCoordinateMap(U=None, V=None):
     """Invert coordinate map.
-    
+
     U(X, Y) and V(X, Y) -> X(U, V) and Y(U, V).
-    
+
     Parameters
     ----------
     U, V : `~numpy.ndarray` or `None`, optional

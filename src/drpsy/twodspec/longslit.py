@@ -28,6 +28,8 @@ from drpsy.validate import (_validateBool, _validateString, _validateRange,
                             _validateCCD, _validateBins, _validateAperture, 
                             _validatePath)
 
+from .utils import invertCoordinateMap
+
 # Set plot parameters
 plt.rcParams['axes.linewidth'] = 1.5
 plt.rcParams['mathtext.fontset'] = 'stix'
@@ -812,7 +814,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
     return U, V
 
 # todo: check Delaunay method for uncertainty estimation.
-def transform(ccd, X, Y, flux=True):
+def transform(ccd, U, V, flux=True):
     """Transform input image to a new coordinate.
 
     Parameters
@@ -820,8 +822,8 @@ def transform(ccd, X, Y, flux=True):
     ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
         Input image.
     
-    X, Y : `~numpy.ndarray`
-        X(U, V), Y(U, V)
+    U, V : `~numpy.ndarray`
+        U(X, Y), V(X, Y)
     
     flux : bool, optional
         If `True` the interpolated output pixel value is multiplied by the Jacobean of 
@@ -842,12 +844,14 @@ def transform(ccd, X, Y, flux=True):
     
     idx_row, idx_col = np.arange(n_row), np.arange(n_col)
 
-    _validateNDArray(X, 'X', 2)
-    _validateNDArray(Y, 'Y', 2)
+    _validateNDArray(U, 'U', 2)
+    _validateNDArray(V, 'V', 2)
 
-    if not (data_arr.shape == X.shape == Y.shape):
+    if not (data_arr.shape == U.shape == U.shape):
         raise ValueError(
             'The input image and the coordinate arrays should have the same shape.')
+
+    X, Y = invertCoordinateMap(U, V)
 
     _validateBool(flux, 'flux')
 
@@ -1534,65 +1538,6 @@ def extract(ccd, slit_along, trace1d, aper_width, n_aper=1, spectral_axis=None,
     return spectrum1d
 
 
-def _calibrate(sens1d, airmass, extinct, shape, use_uncertainty):
-    """Apply a flux calibration"""
-
-    new_sens1d, _, sens, uncertainty, _ = _validateSpectrum(
-        sens1d, 'sens1d', use_uncertainty, False)
-
-    # ``sens``, ``uncertainty`` and ``mask_sens`` should be 1-dimensional arrays. 
-    # Use flatten to get rid of additional dimensions.
-    if sens.ndim > 1:
-        sens = sens.flatten()[:sens.shape[-1]]
-        uncertainty = uncertainty.flatten()[:uncertainty.shape[-1]]
-
-    wavelength = deepcopy(new_sens1d.wavelength)
-    bin_width = np.abs(np.diff(new_sens1d.bin_edges.to(u.AA)))
-
-    # Extinction curve
-    if extinct is not None:
-
-        if isinstance(airmass, str):
-            airmass = spectrum1d.meta['header'][airmass]
-
-        if isinstance(extinct, str):
-            spectrum_ext = loadExtinctionCurve(extinct)
-
-        elif isinstance(extinct, Spectrum1D):
-            spectrum_ext = deepcopy(extinct)
-
-        else:
-            raise TypeError(
-                '``extinct`` should be either a file name of a extinction curve or a '
-                '`~specutils.Spectrum1D` object if not `None`.')
-
-        wavelength_ext = spectrum_ext.wavelength.value
-        extinction = spectrum_ext.flux.value
-
-        extinction = interpolate.interp1d(
-            x=wavelength_ext, y=extinction, kind='quadratic', bounds_error=False, 
-            fill_value='extrapolate', assume_sorted=True)(wavelength.value)
-
-        sens -= (airmass * extinction)
-
-    sens = 10**(0.4 * sens)
-    uncertainty *= 0.4 * np.log(10) * sens
-
-    shape = np.hstack([shape, 1])
-
-    sens = np.tile(sens, shape) * new_sens1d.flux.unit
-    uncertainty = StdDevUncertainty(np.tile(uncertainty, shape))
-
-    if 'header' in sens1d.meta:
-        meta = deepcopy(sens1d.meta)
-    else:
-        meta = {'header': dict()}
-    # Add headers here
-    meta['header']['AIRMASS'] = airmass
-
-    return wavelength, bin_width, sens, uncertainty, meta
-
-
 def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d, 
                 use_uncertainty=False):
     """Apply a flux calibration to a 2-dimensional spectrum.
@@ -1631,50 +1576,100 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
     calibrated_ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
         Calibrated 2-dimensional spectrum.
     """
-    
-    _validateString(slit_along, 'slit_along', ['col', 'row'])
-    
-    if slit_along == 'col':
-        nccd, data_arr, uncertainty_arr, _ = _validateCCD(
-            ccd, 'ccd', True, False, False)
-    else:
-        nccd, data_arr, uncertainty_arr, _ = _validateCCD(
-            ccd, 'ccd', True, False, True)
-
-    if data_arr.ndim == 1:
-        shape = []
-    else:
-        shape = data_arr.shape[:-1]
 
     _validateBool(use_uncertainty, 'use_uncertainty')
 
-    wavelength, bin_width, sens, uncertainty_sens, meta_sens = _calibrate(
-        sens1d, airmass, extinct, shape, use_uncertainty)
+    new_sens1d, _, sens, uncertainty_sens, _ = _validateSpectrum(
+        sens1d, 'sens1d', use_uncertainty_sens, False)
 
-    # Unit conversion
+    # ``sens``, ``uncertainty_sens`` and ``mask_sens`` should be 1-dimensional arrays. 
+    # Use flatten to get rid of additional dimensions.
+    if sens.ndim > 1:
+        sens = sens.flatten()[:sens.shape[-1]]
+        uncertainty_sens = uncertainty_sens.flatten()[:uncertainty_sens.shape[-1]]
+
+    wavelength_sens = new_sens1d.wavelength.value
+
+    # Extinction curve
+    if extinct is not None:
+
+        if isinstance(airmass, str):
+            airmass = spectrum1d.meta['header'][airmass]
+
+        if isinstance(extinct, str):
+            spectrum_ext = loadExtinctionCurve(extinct)
+
+        elif isinstance(extinct, Spectrum1D):
+            spectrum_ext = deepcopy(extinct)
+
+        else:
+            raise TypeError(
+                '``extinct`` should be either a file name of a extinction curve or a '
+                '`~specutils.Spectrum1D` object if not `None`.')
+
+        wavelength_ext = spectrum_ext.wavelength.value
+        extinction = spectrum_ext.flux.value
+
+        extinction = interpolate.interp1d(
+            x=wavelength_ext, y=extinction, kind='quadratic', bounds_error=False, 
+            fill_value='extrapolate', assume_sorted=True)(wavelength_sens)
+
+        sens -= (airmass * extinction)
+
+    sens = 10**(0.4 * sens)
+    uncertainty_sens *= 0.4 * np.log(10) * sens
+    
+    _validateString(slit_along, 'slit_along', ['col', 'row'])
+
+    if slit_along == 'col':
+        nccd, data_arr, _, _ = _validateCCD(ccd, 'ccd', False, False, False)
+
+    else:
+        nccd, data_arr, _, _ = _validateCCD(ccd, 'ccd', False, False, True)
+
+    n_row, n_col = data_arr.shape
+
+    if wavelength_sens.shape[0] != n_col:
+        raise ValueError(
+            'The spectral axes of ``ccd`` and ``sens1d`` should be the same.')
+
     if isinstance(exptime, str):
         exptime = nccd.header[exptime] * u.s
 
+    bin_width = np.abs(np.diff(new_sens1d.bin_edges.to(u.AA)))
+
     flux_obs = (data_arr * nccd.unit) / (exptime * bin_width) # [counts/s/Angstrom]
-    uncertainty_obs = StdDevUncertainty(
-        uncertainty_arr / (exptime.value * bin_width.value))
+
+    if nccd.uncertainty is not None:
+        uncertainty_obs = nccd.uncertainty.array / (exptime.value * bin_width.value)
+
+    else:
+        uncertainty_obs = None
+
+    sens = np.tile(sens, (n_row, 1)) * new_sens1d.flux.unit
+
+    uncertainty_sens = np.tile(uncertainty_sens, (n_row, 1))
+
+    if 'header' in new_sens1d.meta:
+        header_sens = new_sens1d.meta['header']
+
+    else:
+        header_sens = None
 
     if slit_along == 'col':
-
         sccd = CCDData(
-            data=sens, uncertainty=uncertainty_sens, header=meta_sens['header'])
-
+            data=sens, uncertainty=StdDevUncertainty(uncertainty_sens), 
+            header=header_sens)
         nccd = CCDData(
-            data=flux_obs, uncertainty=uncertainty_obs, mask=nccd.mask, 
-            header=nccd.header)
+            data=flux_obs, uncertainty=StdDevUncertainty(uncertainty_obs), 
+            mask=nccd.mask, header=nccd.header)
+
     else:
-
         sccd = CCDData(
-            data=sens.T, uncertainty=StdDevUncertainty(uncertainty_sens.array.T), 
-            header=meta_sens['header'])
-
+            data=sens.T, uncertainty=StdDevUncertainty(uncertainty_sens.T), 
+            header=header_sens)
         nccd = CCDData(
-            data=flux_obs.T, uncertainty=StdDevUncertainty(uncertainty_obs.array.T), 
+            data=flux_obs.T, uncertainty=StdDevUncertainty(uncertainty_obs.T), 
             mask=nccd.mask, header=nccd.header)
 
     # Calibrate
@@ -1687,7 +1682,7 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
     if isinstance(ccd, CCDData):
         # Add headers here
         calibrated_ccd.header['EXPTIME'] = exptime.value
-        calibrated_ccd.header['AIRMASS'] = sccd.header['AIRMASS']
+        calibrated_ccd.header['AIRMASS'] = airmass
         calibrated_ccd.header['CALIBRAT'] = '{} Calibrated'.format(
             Time.now().to_value('iso', subfmt='date_hm'))
 
