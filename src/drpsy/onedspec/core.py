@@ -22,12 +22,12 @@ from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
 from drpsy.validate import (_validateBool, _validateString, _validateSpectrum, 
                             _validatePath)
 
-from .utils import (_center1D_Gaussian, _refinePeakBases, _refinePeaks, loadSpectrum1D, 
-                    loadStandardSpectrum, loadExtinctionCurve)
+from .utils.center import _center1D_Gaussian, _refinePeakBases, _refinePeaks
+from .utils.io import loadSpectrum1D, loadStandardSpectrum, loadExtinctionCurve
 
 __all__ = ['dispcor', 'sensfunc', 'calibrate1d']
 
-
+# keyword peak_heights -> heights
 def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5, 
             sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
             title='dispcor', show=conf.show, save=conf.save, path=conf.path):
@@ -138,7 +138,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
         shifted_peaks = peak_tbl['peaks'].value - shift
         shifted_left_bases = peak_tbl['left_bases'].value - shift
         shifted_right_bases = peak_tbl['right_bases'].value - shift
-        heights = peak_tbl['heights'].value
+        heights = peak_tbl['peak_heights'].value
         
         refined_left_bases, refined_right_bases = _refinePeakBases(
             peaks=shifted_peaks, left_bases=shifted_left_bases, 

@@ -181,13 +181,6 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
         Path to save plot in.
     """
 
-    new_spectrum1d, spectral_axis, flux, uncertainty, mask = _validateSpectrum(
-        spectrum1d, 'spectrum1d', True, True)
-
-    # Apply mask
-    flux[mask] = np.nan
-    uncertainty[mask] = np.nan
-
     _validateBool(show, 'show')
 
     _validateString(title, 'title')
@@ -198,9 +191,22 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
 
     if show | save:
 
+        new_spectrum1d, spectral_axis, flux, uncertainty, mask = _validateSpectrum(
+            spectrum1d, 'spectrum1d', True, True)
+
+        # Apply mask
+        flux[mask] = np.nan
+        uncertainty[mask] = np.nan
+
+        unit_spectral_axis = new_spectrum1d.spectral_axis.unit.to_string()
+        unit_flux = new_spectrum1d.flux.unit.to_string()
+
+        xlabel = f'spectral axis [{unit_spectral_axis}]'
+        ylabel = f'flux [{unit_flux}]'
+
         fig = plt.figure(figsize=(6, 4), dpi=100)
         ax = fig.add_subplot(1, 1, 1)
-        _plotSpectrum1D(ax, spectral_axis, flux, uncertainty)
+        _plotSpectrum1D(ax, spectral_axis, flux, uncertainty, xlabel=xlabel, ylabel=ylabel)
 #         ax.legend(fontsize=16)
         ax.set_title(title, fontsize=16)
         fig.tight_layout()

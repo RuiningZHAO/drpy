@@ -1,6 +1,9 @@
 import warnings
 from copy import deepcopy
 
+# AstroPy
+from astropy.time import Time
+# drpsy
 from drpsy.validate import _validate1DArray, _validateCCDList
 
 __all__ = ['concatenate']

@@ -20,12 +20,15 @@ from specutils import Spectrum1D
 
 from drpsy import conf
 from drpsy.batch import CCDDataList
-from drpsy.onedspec.utils import _center1D_Gaussian, _refinePeakBases, _refinePeaks
+from drpsy.onedspec.utils.center import (_center1D_Gaussian, _refinePeakBases, 
+                                         _refinePeaks)
+from drpsy.onedspec.utils.io import loadExtinctionCurve
 from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
 from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
 from drpsy.validate import (_validateBool, _validateString, _validateRange, 
-                            _validateInteger, _validate1DArray, _validateCCDList, 
-                            _validateCCD, _validateBins, _validateAperture, 
+                            _validateInteger, _validate1DArray, _validateNDArray, 
+                            _validateCCDData, _validateCCDList, _validateCCD, 
+                            _validateSpectrum, _validateBins, _validateAperture, 
                             _validatePath)
 
 from .utils import invertCoordinateMap
@@ -82,7 +85,7 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     Returns
     -------
     nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Response calibration image, of the same type as the input ``ccd``.
+        Response calibration frame, of the same type as the input ``ccd``.
     """
 
     _validateString(slit_along, 'slit_along', ['col', 'row'])
@@ -102,7 +105,7 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
 
     # Average along spatial (slit) axis
     x = np.arange(n_col)
-    # Bad pixels (NaNs or infs) in the original image (if any) may lead to unmasked 
+    # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
     # elements in ``y`` and may cause an error in the spline fitting below.
     y = np.nanmean(data_arr, axis=0)
     mask_y = np.all(mask_arr, axis=0)
@@ -135,7 +138,7 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
             mask=np.tile(master_mask, (n_row, 1)).T
         )
 
-    # Response calibrated image
+    # Response calibrated frame
     nccd = flat_correct(ccd=nccd, flat=rccd, norm_value=1)
 
     if ccd.uncertainty is None:
@@ -323,7 +326,7 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         bin_threshold_lower = [None] * n_bin
         bin_threshold_upper = [None] * n_bin
         for i, (bin_start, bin_end) in enumerate(bin_edges):
-            # Bad pixels (NaNs or infs) in the original image (if any) may lead to 
+            # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
             # unmasked elements in ``count_bin_arr`` and may cause an error in the 
             # spline fitting below.
             bin_data_arr[i] = np.nanmean(data_arr[:, bin_start:bin_end], axis=1)
@@ -706,9 +709,9 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
         # All the elements of ``x`` and ``y`` are within [idx_col[0], idx_col[-1]] and 
         # [idx_row[0], idx_row[-1]], respectively. Therefore, extrapolation is 
         # inevitably used when calculating z(x, y), which is defined on the whole 
-        # image. However, `~scipy.interpolate.LSQBivariateSpline` called by `Spline2D` 
+        # frame. However, `~scipy.interpolate.LSQBivariateSpline` called by `Spline2D` 
         # does not support extrapolation. An alternative way is to use ``bbox``. Here 
-        # we set ``bbox`` to be the boundary of the whole image and therefore will get 
+        # we set ``bbox`` to be the boundary of the whole frame and therefore will get 
         # correct return when calling `~scipy.interpolate.LSQBivariateSpline.__call__`. 
         # Note that doing this will not change the fitting result as long as the 
         # internal knots remain the same. (Also see cautions mentioned by 
@@ -814,50 +817,48 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
     return U, V
 
 # todo: check Delaunay method for uncertainty estimation.
-def transform(ccd, U, V, flux=True):
-    """Transform input image to a new coordinate.
+def transform(ccd, X, Y, flux=True):
+    """Transform input frame to a new coordinate.
 
     Parameters
     ----------
     ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Input image.
+        Input frame.
     
-    U, V : `~numpy.ndarray`
-        U(X, Y), V(X, Y)
+    X, Y : `~numpy.ndarray`
+        X(U, V), Y(U, V)
     
     flux : bool, optional
         If `True` the interpolated output pixel value is multiplied by the Jacobean of 
         the transformation (essentially the ratio of pixel areas between the input and 
-        output images).
+        output frames).
     
     Returns
     -------
     nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        The transformed image.
+        The transformed frame.
     """
 
     nccd = _validateCCDData(ccd, 'ccd')
-    
+
     data_arr = deepcopy(nccd.data)
 
     n_row, n_col = data_arr.shape
-    
+
     idx_row, idx_col = np.arange(n_row), np.arange(n_col)
 
-    _validateNDArray(U, 'U', 2)
-    _validateNDArray(V, 'V', 2)
+    _validateNDArray(X, 'X', 2)
+    _validateNDArray(Y, 'Y', 2)
 
-    if not (data_arr.shape == U.shape == U.shape):
+    if not (data_arr.shape == X.shape == Y.shape):
         raise ValueError(
-            'The input image and the coordinate arrays should have the same shape.')
-
-    X, Y = invertCoordinateMap(U, V)
+            'The input frame and the coordinate arrays should have the same shape.')
 
     _validateBool(flux, 'flux')
 
     # Flux conservation consists of multiplying the interpolated pixel value by the 
     # Jacobean of the transformation at that point. This is essentially the ratio of 
-    # the pixel areas between the input and output images. (for details see 
+    # the pixel areas between the input and output frames. (for details see 
     # https://iraf.net/irafhelp.php?val=longslit.transform&help=Help+Page)
     if flux:
         x = (idx_col[1:] + idx_col[:-1]) / 2
@@ -1013,7 +1014,7 @@ def trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_it
 
     _validateRange(fwhm, 'fwhm', (2, None), (True, None))
 
-    # Bad pixels (NaNs or infs) in the original image (if any) may lead to unmasked 
+    # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
     # elements in ``count_med`` and may cause an error in the Gaussian fitting below.
     count_med = np.nanmedian(data_arr, axis=1)
     mask_med = np.all(mask_arr, axis=1)
@@ -1064,7 +1065,7 @@ def trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_it
 
         for i in range(n_bin):
 
-            # Bad pixels (NaNs or infs) in the original image (if any) may lead to 
+            # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
             # unmasked elements in ``count_med`` and may cause an error in the 
             # Gaussian fitting below.
             count_bin = np.nanmedian(
@@ -1350,7 +1351,7 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
         plt.close()
 
-    # Background image
+    # Background frame
     if slit_along == 'col':
         nccd.data = deepcopy(bkg_arr)
 
@@ -1549,7 +1550,7 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
 
     slit_along : str
         `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
-        calculations. Note that this will NOT affect the returned image, which is 
+        calculations. Note that this will NOT affect the returned frame, which is 
         always of the same shape as ``ccd``.
 
     exptime : str or scalar
@@ -1580,7 +1581,7 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
     _validateBool(use_uncertainty, 'use_uncertainty')
 
     new_sens1d, _, sens, uncertainty_sens, _ = _validateSpectrum(
-        sens1d, 'sens1d', use_uncertainty_sens, False)
+        sens1d, 'sens1d', use_uncertainty, False)
 
     # ``sens``, ``uncertainty_sens`` and ``mask_sens`` should be 1-dimensional arrays. 
     # Use flatten to get rid of additional dimensions.
