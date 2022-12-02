@@ -20,9 +20,8 @@ from specutils import Spectrum1D
 
 from drpsy import conf
 from drpsy.batch import CCDDataList
-from drpsy.onedspec.utils.center import (_center1D_Gaussian, _refinePeakBases, 
-                                         _refinePeaks)
-from drpsy.onedspec.utils.io import loadExtinctionCurve
+from drpsy.onedspec import loadExtinctionCurve
+from drpsy.onedspec.center import _center1D_Gaussian, _refinePeakBases, _refinePeaks
 from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
 from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
 from drpsy.validate import (_validateBool, _validateString, _validateRange, 

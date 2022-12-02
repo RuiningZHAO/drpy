@@ -8,7 +8,7 @@ from astropy import config as _config
 
 __all__ = ['__version__', 'conf']
 
-__version__ = '0.0.3.1'
+__version__ = '0.0.4.1'
 
 
 class Conf(_config.ConfigNamespace):

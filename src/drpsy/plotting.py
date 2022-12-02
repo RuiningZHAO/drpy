@@ -171,6 +171,9 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
     
     Parameters
     ----------
+    spectrum1d : `~specutils.Spectrum1D` or `~numpy.ndarray`
+        Input spectrum.
+
     show : bool, optional
         Whether to show plot.
 
@@ -198,6 +201,7 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
         flux[mask] = np.nan
         uncertainty[mask] = np.nan
 
+        # Labels
         unit_spectral_axis = new_spectrum1d.spectral_axis.unit.to_string()
         unit_flux = new_spectrum1d.flux.unit.to_string()
 
@@ -207,7 +211,7 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
         fig = plt.figure(figsize=(6, 4), dpi=100)
         ax = fig.add_subplot(1, 1, 1)
         _plotSpectrum1D(ax, spectral_axis, flux, uncertainty, xlabel=xlabel, ylabel=ylabel)
-#         ax.legend(fontsize=16)
+        # ax.legend(fontsize=16)
         ax.set_title(title, fontsize=16)
         fig.tight_layout()
 

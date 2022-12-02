@@ -190,7 +190,7 @@ def loadStandardSpectrum(standard):
 
     dir_library = os.path.realpath(
         os.path.join(
-            os.path.split(os.path.realpath(__file__))[0], '../lib/onedstds'
+            os.path.split(os.path.realpath(__file__))[0], 'lib/onedstds'
         )
     )
 
@@ -289,7 +289,7 @@ def loadExtinctionCurve(extinct):
 
         dir_library = os.path.realpath(
             os.path.join(
-                os.path.split(os.path.realpath(__file__))[0], '../lib/extinction'
+                os.path.split(os.path.realpath(__file__))[0], 'lib/extinction'
             )
         )
 
