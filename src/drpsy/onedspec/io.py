@@ -18,7 +18,7 @@ __all__ = ['saveSpectrum1D', 'loadSpectrum1D', 'loadStandardSpectrum',
            'loadExtinctionCurve']
 
 
-def _Spectrum1D_to_hdu(spectrum1d):
+def _Spectrum1D_to_hdu(spectrum1d, header):
     """Convert a `~specutils.Spectrum1D` object to hdu."""
 
     # spectral_axis
@@ -61,11 +61,11 @@ def _Spectrum1D_to_hdu(spectrum1d):
             name='mask', format=format, dim=dim, array=array.T)
         columns.append(mask)
 
-    hdu = fits.BinTableHDU.from_columns(columns)
+    hdu = fits.BinTableHDU.from_columns(columns, header)
 
     return hdu
 
-# todo: add additional header
+
 def saveSpectrum1D(file_name, spectrum1d):
     """Save a `~specutils.Spectrum1D` object to file.
     
@@ -79,17 +79,17 @@ def saveSpectrum1D(file_name, spectrum1d):
     """
 
     new_spectrum1d = _validateSpectrum1D(spectrum1d, 'spectrum1d')
-
-    hdu = _Spectrum1D_to_hdu(new_spectrum1d)
     
-    # # header
-    # if 'header' in new_spectrum1d.meta:
-    #     header = new_spectrum1d.meta['header']
-    #     for (key, value), comment in zip(header.items(), header.comments):
-    #         if key not in hdu.header:
-    #             hdu.header[key] = (value, comment)
-    # hdu.header['MODIFIED'] = (
-    #     '{}'.format(Time.now().to_value('iso', subfmt='date_hm')), 'last modified')
+    # header
+    if 'header' in new_spectrum1d.meta:
+        header = new_spectrum1d.meta['header']
+    else:
+        header = None
+
+    hdu = _Spectrum1D_to_hdu(new_spectrum1d, header)
+
+    hdu.header['MODIFIED'] = (
+        '{}'.format(Time.now().to_value('iso', subfmt='date_hm')), 'last modified')
 
     hdulist = fits.HDUList([fits.PrimaryHDU(), hdu])
 
