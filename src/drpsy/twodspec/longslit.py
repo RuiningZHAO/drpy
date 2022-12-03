@@ -1535,6 +1535,9 @@ def extract(ccd, slit_along, trace1d, aper_width, n_aper=1, spectral_axis=None,
         uncertainty=StdDevUncertainty(uncertainty_aper), mask=mask_aper, 
         meta={'header': nccd.header})
 
+    if n_aper == 1:
+        spectrum1d = spectrum1d[0]
+
     return spectrum1d
 
 
