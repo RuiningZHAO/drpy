@@ -63,6 +63,10 @@ def _Spectrum1D_to_hdu(spectrum1d, header):
 
     hdu = fits.BinTableHDU.from_columns(columns, header)
 
+    hdu.header['EXTNAME'] = 'spec'
+    hdu.header['MODIFIED'] = (
+        '{}'.format(Time.now().to_value('iso', subfmt='date_hm')), 'last modified')
+
     return hdu
 
 
@@ -87,9 +91,6 @@ def saveSpectrum1D(file_name, spectrum1d):
         header = None
 
     hdu = _Spectrum1D_to_hdu(new_spectrum1d, header)
-
-    hdu.header['MODIFIED'] = (
-        '{}'.format(Time.now().to_value('iso', subfmt='date_hm')), 'last modified')
 
     hdulist = fits.HDUList([fits.PrimaryHDU(), hdu])
 
