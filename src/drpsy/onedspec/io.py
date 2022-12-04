@@ -58,19 +58,19 @@ def _Spectrum1D_to_hdu(spectrum1d, header):
     if spectrum1d.mask is not None:
         array = spectrum1d.mask
         mask = fits.Column(
-            name='mask', format=format, dim=dim, array=array.T)
+            name='mask', format='L', dim=dim, array=array.T)
         columns.append(mask)
 
     hdu = fits.BinTableHDU.from_columns(columns, header)
 
-    hdu.header['EXTNAME'] = 'spec'
+    hdu.header['EXTNAME'] = ('spec', 'name of the extension')
     hdu.header['MODIFIED'] = (
         '{}'.format(Time.now().to_value('iso', subfmt='date_hm')), 'last modified')
 
     return hdu
 
 
-def saveSpectrum1D(file_name, spectrum1d):
+def saveSpectrum1D(file_name, spectrum1d, overwrite=False):
     """Save a `~specutils.Spectrum1D` object to file.
     
     Parameters
@@ -94,7 +94,7 @@ def saveSpectrum1D(file_name, spectrum1d):
 
     hdulist = fits.HDUList([fits.PrimaryHDU(), hdu])
 
-    hdulist.writeto(file_name, overwrite=True)
+    hdulist.writeto(file_name, overwrite=overwrite)
 
     return None
 
