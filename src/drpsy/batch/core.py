@@ -46,8 +46,6 @@ class CCDDataList:
         ccddatalist : `CCDDataList`
             Constructed `CCDDataList` object.
         """
-        
-        print(unit)
 
         ccddatalist = list()
         for file_name in file_list:
@@ -188,13 +186,25 @@ class CCDDataList:
         return ccddatalist
 
     # todo: use min_value to get rid of negative values ???
-    def divide(self, master):
+    def divide(self, master, min_value=None, norm_value=None):
         """Divide ``master`` from the `CCDDataList` object.
 
         Parameters
         ----------
         master : `~astropy.nddata.CCDData`
             Image to be divided from the `CCDDataList` object. Usually a master flat.
+        
+        min_value : float or `None`, optional
+            Minimum value for flat field. The value can either be None and no minimum 
+            value is applied to the flat or specified by a float which will replace all 
+            values in the flat by the min_value. 
+            Default is `None`.
+
+        norm_value : float or `None`, optional
+            If not `None`, normalize flat field by this argument rather than the mean 
+            of the image. This allows fixing several different flat fields to have the 
+            same scale. If this value is negative or 0, a `ValueError` is raised. 
+            Default is `None`.
 
         Returns
         -------
@@ -216,7 +226,8 @@ class CCDDataList:
         for ccd in self._ccddatalist:
             ccddatalist.append(
                 flat_correct(
-                    ccd=ccd, flat=master, norm_value=1, add_keyword=keywords_dict)
+                    ccd=ccd, flat=master, min_value=min_value, norm_value=norm_value, 
+                    add_keyword=keywords_dict)
             )
         ccddatalist = self.__class__(ccddatalist)
 

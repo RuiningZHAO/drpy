@@ -18,7 +18,7 @@ from specutils import Spectrum1D
 # drpsy
 from drpsy import conf
 from drpsy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
-from drpsy.plotting import plotFitting, _plot2d, _plotSpectrum1D
+from drpsy.plotting import plotFitting, _plotSpectrum1D
 from drpsy.validate import (_validateBool, _validateString, _validateSpectrum, 
                             _validatePath)
 
