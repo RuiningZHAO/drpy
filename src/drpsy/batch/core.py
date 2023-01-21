@@ -81,7 +81,7 @@ class CCDDataList:
         self._ccddatalist = deepcopy(ccddatalist)   
 
 
-    def trim(self, row_range, col_range):
+    def trim(self, row_range, col_range, **kwargs):
         """Trim images.
 
         Parameters
@@ -98,34 +98,17 @@ class CCDDataList:
             Trimmed images.
         """
         
-        # Custom keywords
-        keywords_dict = {
-            'WCSDIM': 2,
-            'LTM1_1': 1.,
-            'LTM2_2': 1.,
-            'LTV1': -col_range[0],
-            'LTV2': -row_range[0],
-            'WAT0_001': 'system=physical',
-            'WAT1_001': 'wtype=linear',
-            'WAT2_001': 'wtype=linear',
-            'TRIM': '{} Trim data section is [{}:{},{}:{}]'.format(
-                Time.now().to_value('iso', subfmt='date_hm'), (col_range[0] + 1), 
-                col_range[1], (row_range[0] + 1), row_range[1]),
-            'CCDSEC': '[{}:{},{}:{}]'.format(
-                (col_range[0] + 1), col_range[1], (row_range[0] + 1), row_range[1]),
-            'BIASSEC': '[1:{},1:{}]'.format(
-                (col_range[1] - col_range[0]), (row_range[1] - row_range[0])),
-        }
-
         ccddatalist = list()
         for ccd in self._ccddatalist:
             ccddatalist.append(
                 trim_image(
                     ccd=ccd[row_range[0]:row_range[1], col_range[0]:col_range[1]], 
-                    add_keyword=keywords_dict)
+                    **kwargs
+                )
             )
+        
         ccddatalist = self.__class__(ccddatalist)
-
+        
         return ccddatalist
 
 
