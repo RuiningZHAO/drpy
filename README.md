@@ -1,5 +1,5 @@
 # drpy
-drpy (pronounced "doctor pi") is a **d**ata **r**eduction toolkit for astronomical **p**hotometry and spectroscop**y**
+drpy (pronounced "doctor pi") is a **D**ata **R**eduction toolkit for astronomical **P**hotometry and spectroscop**Y**
 
 ## Installation
 
