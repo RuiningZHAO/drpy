@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "drpsy"
-description = "A Data Reduction Toolkit for Astronomical Photometry and Spectroscopy"
+name = "drpy"
+description = "A data reduction toolkit for astronomical photometry and spectroscopy."
 readme = {file = "README.md", content-type = "text/markdown"}
 authors = [
   {name = "Ruining ZHAO", email = "ruiningzhao@mail.bnu.edu.cn"}, 
@@ -18,16 +18,16 @@ classifiers = [
 dynamic = ["version", "dependencies"]
 
 [project.urls]
-"Homepage" = "https://github.com/RuiningZHAO/drpsy"
-"Tracker" = "https://github.com/RuiningZHAO/drpsy/issues"
+"Homepage" = "https://github.com/RuiningZHAO/drpy"
+"Tracker" = "https://github.com/RuiningZHAO/drpy/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]  # list of folders that contain the packages (["."] by default)
 include = ["*"]  # package names should match these glob patterns (["*"] by default)
 
 [tool.setuptools.package-data]
-drpsy = ["lib/**/*"]
+drpy = ["lib/**/*"]
 
 [tool.setuptools.dynamic]
-version = {attr = "drpsy.__version__"}
+version = {attr = "drpy.__version__"}
 dependencies = {file = "requirements.txt"}

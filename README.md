@@ -1,10 +1,10 @@
-# drpsy
-drpsy (pronounced "doctor psi") is a **D**ata **R**eduction Toolkit for Astronomical **P**hotometry and **S**pectroscop**y**
+# drpy
+drpy (pronounced "doctor pi") is a **d**ata **r**eduction toolkit for astronomical **p**hotometry and spectroscop**y**
 
 ## Installation
 
 ```
-pip install drpsy
+pip install drpy
 ```
 
 ## Note
