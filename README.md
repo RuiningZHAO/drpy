@@ -4,7 +4,7 @@ drpy (pronounced "doctor pi") is a **D**ata **R**eduction toolkit for astronomic
 ## Installation
 
 ```
-pip install drpy
+pip install astro-drpy
 ```
 
 ## Note
