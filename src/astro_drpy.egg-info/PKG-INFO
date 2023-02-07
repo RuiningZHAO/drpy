@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: astro-drpy
-Version: 0.0.1.0
+Version: 0.0.1.1
 Summary: A data reduction toolkit for astronomical photometry and spectroscopy.
 Author-email: Ruining ZHAO <ruiningzhao@mail.bnu.edu.cn>
 Project-URL: Homepage, https://github.com/RuiningZHAO/drpy
@@ -18,7 +18,7 @@ drpy (pronounced "doctor pi") is a **D**ata **R**eduction toolkit for astronomic
 ## Installation
 
 ```
-pip install drpy
+pip install astro-drpy
 ```
 
 ## Note

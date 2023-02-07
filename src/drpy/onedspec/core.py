@@ -28,7 +28,7 @@ from .io import loadSpectrum1D, loadStandardSpectrum, loadExtinctionCurve
 __all__ = ['dispcor', 'sensfunc', 'calibrate1d']
 
 
-def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5, 
+def dispcor(spectrum1d, reverse, reference, n_piece=3, refit=True, n_iter=5, 
             sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
             title='dispcor', show=conf.show, save=conf.save, path=conf.path):
     """Dispersion correction.
@@ -42,7 +42,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
         Reverse the input spectrum or not. Set to `True` if the spectral axis of the 
         input spectrum is in reverse order.
 
-    file_name : str
+    reference : str
         File name of the reference spectrum.
 
     n_piece : int, optional
@@ -88,7 +88,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
     if reverse:
         flux = flux[::-1]
 
-    spectrum1d_ref = loadSpectrum1D(file_name, ext='spec')
+    spectrum1d_ref = loadSpectrum1D(reference, ext='spec')
     spectral_axis_ref = spectrum1d_ref.spectral_axis.value
     unit_spectral_axis = spectrum1d_ref.spectral_axis.unit
     flux_ref = spectrum1d_ref.flux.value
@@ -132,7 +132,7 @@ def dispcor(spectrum1d, reverse, file_name, n_piece=3, refit=True, n_iter=5,
 
     else:
         # Load peak table
-        peak_tbl = Table.read(file_name, format='fits', hdu='peak')
+        peak_tbl = Table.read(reference, format='fits', hdu='peak')
 
         # Reidentify
         shifted_peaks = peak_tbl['peaks'].value - shift
