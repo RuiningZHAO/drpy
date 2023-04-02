@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import astropy.units as u
 from astropy.time import Time
 from astropy.nddata import CCDData, StdDevUncertainty
+from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 # ccdproc
 from ccdproc import flat_correct
 # specutils
@@ -105,7 +106,8 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     # Average along spatial (slit) axis
     x = np.arange(n_col)
     # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
-    # elements in ``y`` and may cause an error in the spline fitting below.
+    # elements in ``y`` and may cause an error in the spline fitting below. Bad columns 
+    # will raise warnings but may not cause error.
     y = np.nanmean(data_arr, axis=0)
     mask_y = np.all(mask_arr, axis=0)
 
@@ -175,14 +177,15 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         calculations. Note that this will NOT affect the returned frame, which is 
         always of the same shape as ``ccd``.
 
-    method : str
-        `Gaussian2D` or `CubicSpline2D` or `iraf`.
+    method : {'Gaussian2D', 'CubicSpline2D', 'iraf'}
+        Method to model illumination.
         - if `Gaussian2D`, ``sigma`` is required. [...]
-        - if `CubicSpline2D`, ``n_piece`` is required. [...]
+        - if `CubicSpline2D`, both ``sigma`` and ``n_piece`` are required. [...]
         - if `iraf`, ``n_piece`` is required. [...]
 
     sigma : scalar or sequence of scalars or `None`, optional
-        Standard deviation for `~scipy.ndimage.gaussian_filter`.
+        Standard deviation for Gaussian filter. If sequence of scalars, the first 
+        element should be standard deviation along the x axis.
         Default is `None`.
 
     n_piece : int or sequence of scalars or `None`, optional
@@ -252,44 +255,84 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
     _validateString(method, 'method', ['Gaussian2D', 'CubicSpline2D', 'iraf'])
 
     if '2D' in method: # 2-dimensional method (`Gaussian2D` or `CubicSpline2D`)
+        
+        if slit_along == 'col':
 
-        x = np.tile(idx_col, (n_row, 1))
-        y = np.tile(idx_row, (n_col, 1)).T
+            try:
+                sigma = sigma[::-1]
+
+            except:
+                pass
+        
+        else:
+            try:
+                n_piece = n_piece[::-1]
+
+            except:
+                pass
+        
+        # (X, Y) grid
+        X = np.tile(idx_col, (n_row, 1))
+        Y = np.tile(idx_row, (n_col, 1)).T
+        
+        # Interpolate masked pixels
+        if mask_arr.any():
+            
+            # 2-dimensional Gaussian kernel
+            x_stddev, y_stddev = sigma
+            x_size, y_size = int(8 * x_stddev + 1), int(8 * y_stddev + 1)
+            kernel = Gaussian2DKernel(
+                x_stddev=x_stddev, y_stddev=y_stddev, theta=0.0, x_size=x_size, 
+                y_size=y_size, mode='center')
+            
+            # `~astropy.convolution.convolve_fft` is faster in most cases. However, it 
+            # does not support `extend` method and may lead to bad boundary values. 
+            # Therefore, the original frame is extended before convolution by half of 
+            # the kernal size. The padding pixels are filled with nearest good values.
+            
+            # Extend (X, Y) grid
+            x_pad, y_pad = (x_size - 1) // 2, (y_size - 1) // 2
+            idx_row_extended = np.arange(idx_row[0] - y_pad, idx_row[-1] + y_pad + 1)
+            idx_col_extended = np.arange(idx_col[0] - x_pad, idx_col[-1] + x_pad + 1)
+            X_extended = np.tile(idx_col_extended, (n_row + y_size - 1, 1))
+            Y_extended = np.tile(idx_row_extended, (n_col + x_size - 1, 1)).T
+            
+            # Extend data array
+            data_arr_extended = interpolate.griddata(
+                points=(X[~mask_arr], Y[~mask_arr]), values=data_arr[~mask_arr], 
+                xi=(X_extended.flatten(), Y_extended.flatten()), method='nearest'
+            ).reshape(X_extended.shape)
+            
+            # Apply mask
+            data_arr_extended[y_pad:-y_pad, x_pad:-x_pad][mask_arr] = np.nan
+            
+            # Replace NaNs
+            data_arr = interpolate_replace_nans(
+                data_arr_extended, kernel, boundary='fill', fill_value=0., 
+                convolve=convolve_fft)[y_pad:-y_pad, x_pad:-x_pad]
 
         if method == 'Gaussian2D':
 
-            if slit_along == 'col':
-
-                try:
-                    sigma = sigma[::-1]
-
-                except:
-                    pass
-
             data_fit, residual, threshold_lower, threshold_upper, master_mask = (
                 GaussianSmoothing2D(
-                    x=x, y=y, z=data_arr, sigma=sigma, mask=mask_arr, n_iter=n_iter, 
+                    x=X, y=Y, z=data_arr, sigma=sigma, mask=None, n_iter=n_iter, 
                     sigma_lower=sigma_lower, sigma_upper=sigma_upper, axis=0, 
                     grow=grow, use_relative=True)
             )
 
         elif method == 'CubicSpline2D':
             
-            if slit_along == 'col':
-                try:
-                    n_piece = n_piece[::-1]
-
-                except:
-                    pass
-
             bispl, residual, threshold_lower, threshold_upper, master_mask = Spline2D(
-                x=x, y=y, z=data_arr, weight=None, mask=mask_arr, order=(3, 3), 
+                x=X, y=Y, z=data_arr, weight=None, mask=None, order=(3, 3), 
                 n_piece=n_piece, n_iter=n_iter, sigma_lower=sigma_lower, 
                 sigma_upper=sigma_upper, axis=0, grow=grow, use_relative=True)
 
             data_fit = bispl(idx_col, idx_row, grid=True).T
         
-        uncertainty_arr = (data_fit * residual)[~master_mask].std(ddof=1)
+        master_mask |= mask_arr
+        
+        uncertainty_arr = np.full(
+            (n_row, n_col), (data_fit * residual)[~master_mask].std(ddof=1))
 
         # In 2D case, ``loc_bin`` is only used as index, thus converted to ``int``.
         idx_bin = loc_bin.astype(int)
@@ -1269,7 +1312,7 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
         (idx_lbkg_min.min() < -0.5) | (idx_lbkg_max.max() > (n_row - 0.5)) | 
         (idx_rbkg_min.min() < -0.5) | (idx_rbkg_max.max() > (n_row - 0.5))
     ):
-        raise warnings.warn('Background index out of range.', RuntimeWarning)
+        warnings.warn('Background index out of range.', RuntimeWarning)
     
     bkg_arr = np.zeros_like(data_arr)
     std_arr = np.zeros_like(data_arr)
