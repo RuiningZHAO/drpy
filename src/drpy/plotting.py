@@ -227,8 +227,11 @@ def _plot2d(ax, ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column',
     """Plot image."""
 
     if ('vmin' not in kwargs) | ('vmax' not in kwargs):
+        # The first argument is ``n_samples`` after version 5.2 of AstroPy while 
+        # ``nsamples`` before that. Here it is used as positional argument out of 
+        # compatibility.
         zscale = ZScaleInterval(
-            nsamples=600, contrast=contrast, max_reject=0.5, min_npixels=5, krej=2.5, 
+            600, contrast=contrast, max_reject=0.5, min_npixels=5, krej=2.5, 
             max_iterations=5)
         if 'vmax' in kwargs:
             kwargs['vmin'], _ = zscale.get_limits(ccd)

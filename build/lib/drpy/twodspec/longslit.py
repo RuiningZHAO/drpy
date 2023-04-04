@@ -106,7 +106,8 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     # Average along spatial (slit) axis
     x = np.arange(n_col)
     # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
-    # elements in ``y`` and may cause an error in the spline fitting below.
+    # elements in ``y`` and may cause an error in the spline fitting below. Bad columns 
+    # will raise warnings but may not cause error.
     y = np.nanmean(data_arr, axis=0)
     mask_y = np.all(mask_arr, axis=0)
 
@@ -959,8 +960,311 @@ def transform(ccd, X, Y, flux=True):
 
     return nccd
 
+def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=None, 
+          n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, grow=False, 
+          use_mask=False, title='trace', show=conf.show, save=conf.save, 
+          path=conf.path):
+    """Trace on the 2-dimensional spectrum.
+    
+    First the profiles along slit axis are binned by taking median along the dispersion 
+    axis. Then the center of the specified feature (that is the strongest one in the 
+    specified interval) in the middle bin is determined by fitting a Gaussian profile. 
+    [...]
+    
+    Parameters
+    ----------
+    ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
+        Input frame.
+    
+    slit_along : str
+        `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
+        calculations. Note that this will NOT affect the returned trace.
+
+    fwhm : scalar
+        Estimated full width at half maximum of the peak to be traced. (Rough 
+        estimation is enough.)
+
+    method : str
+        `center` or `trace`, and
+        - if `center`, a straight trace at the center of the specified feature in the 
+        middle bin is returned.
+        - if `trace`, the center of the specified feature is treated as an initial
+        guess for bin by bin Gaussian fittings.
+    
+    n_med : int, optional
+        Number of profiles to median. Must be >= `3`. Large number for faint source.
+        Default is `3`.
+    
+    reference_bin : int or `None`, optional
+        Index of the reference bin.
+        If `None`, the reference bin is the middle bin.
+    
+    interval : 2-tuple or `None`, optional
+        Interval the specified feature lies in, and
+        - if `None`, the brightest source in the frame is traced.
+        - if 2-tuple, the brightest source in the interval is traced. (Use this when 
+        the source is not the brightest one in the frame)
+    
+    n_piece : int, optional
+        Number of spline pieces. Lengths are all equal. Must be positive. 
+        Default is `3`.
+    
+    n_iter : int, optional
+        Number of sigma slipping iterations. Must be >= `0`. 
+        Default is `5`.
+
+    sigma_lower : scalar or `None`, optional
+        Number of standard deviations to use as the lower bound for the clipping limit. 
+        If `None` (default), `3` is used.
+
+    sigma_upper : scalar or `None`, optional
+        Number of standard deviations to use as the upper bound for the clipping limit. 
+        If `None` (default), `3` is used.
+    
+    grow : scalar or `False`, optional
+        Radius within which to mask the neighbouring pixels of those that fall outwith 
+        the clipping limits.
+    
+    use_mask : bool, optional
+        If `True` and a mask array is attributed to ``ccd``, the masked pixels are 
+        ignored in the fitting. 
+        Default is `False`.
+
+    Returns
+    -------
+    trace1d : 
+        Fitted trace.
+    """
+    
+    _validateString(slit_along, 'slit_along', ['col', 'row'])
+
+    _validateBool(use_mask, 'use_mask')
+
+    if slit_along == 'col':
+        nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, False)
+    else:
+        nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, True)
+
+    n_row, n_col = data_arr.shape
+
+    idx_row, idx_col = np.arange(n_row), np.arange(n_col)
+    
+    _validateInteger(n_med, 'n_med', (3, None), (True, None))
+    
+    # Split into bins along dispersion axis
+    bin_edges = np.arange(0, n_col, n_med)
+    if bin_edges[-1] < (n_col - 1):
+        bin_edges = np.hstack([bin_edges, (n_col - 1)])
+    bin_edges = np.vstack([bin_edges[:-1], bin_edges[1:]]).T
+    n_bin = bin_edges.shape[0]
+    loc_bin = (bin_edges.sum(axis=1) - 1) / 2
+    
+    # If `None`, the reference bin will be the middle bin when the total number is odd 
+    # while the first bin of the second half when the total number is even.
+    if reference_bin is not None:
+        _validateInteger(reference_bin, 'reference_bin', (0, (n_bin - 1)), (True, True))
+    else:
+        reference_bin = n_bin // 2
+    
+    # Reference bin
+    ref_edge = bin_edges[reference_bin]
+    
+    # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
+    # unmasked elements in ``count_ref`` and may cause an error in the 
+    # Gaussian fitting below.
+    count_ref = np.nanmedian(data_arr[:, ref_edge[0]:ref_edge[1]], axis=1)
+    mask_ref = np.all(mask_arr[:, ref_edge[0]:ref_edge[1]], axis=1)
+    
+    if interval is None:
+        interval = (0, None)
+    else:
+        interval = _validate1DArray(interval, 'interval', 2, False)
+    
+    # Maximum location (should be close to peak center)
+    idx_src_ref = interval[0] + np.ma.argmax(
+        np.ma.array(count_ref, mask=mask_ref)[interval[0]:interval[1]], 
+        fill_value=-np.inf)
+    
+    # Peak range
+    idx_min_ref = int(idx_src_ref - 0.5 * fwhm)
+    idx_max_ref = int(idx_src_ref + 0.5 * fwhm)
+    
+    # Initial guess for Gaussian fitting   
+    initial_guess = (1, idx_src_ref, fwhm)
+    
+    x_ref = idx_min_ref + np.arange(idx_max_ref + 1 - idx_min_ref)
+    # Normalize
+    y_ref = count_ref[idx_min_ref:(idx_max_ref + 1)] / count_ref[idx_src_ref]
+    m_ref = mask_ref[idx_min_ref:(idx_max_ref + 1)]
+    
+    # Gaussian fitting
+    try:
+        center_ref = _center1D_Gaussian(x_ref[~m_ref], y_ref[~m_ref], initial_guess, 0)
+        
+    except (RuntimeError, TypeError, OptimizeWarning): # raise exception here
+        raise RuntimeError('No trace found in the given interval.')
+    
+    _validateString(method, 'method', ['center', 'trace'])
+
+    if method == 'center':
+
+        fitted_trace = np.full(n_col, center_ref)
+        
+    else:
+        
+        refined_trace = np.full(n_bin, np.nan)
+        refined_trace[reference_bin] = center_ref
+        
+        for i in range(reference_bin + 1, n_bin):
+
+            # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
+            # unmasked elements in ``count_bin`` and may cause an error in the 
+            # Gaussian fitting below.
+            count_bin = np.nanmedian(
+                data_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
+            mask_bin = np.all(mask_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
+            
+            # Peak range
+            idx_ref = np.where(~np.isnan(refined_trace))[0].max()
+            idx_min_bin = int(refined_trace[idx_ref] - 0.5 * fwhm)
+            idx_max_bin = int(refined_trace[idx_ref] + 0.5 * fwhm)
+
+            # Peak center
+            idx_src_bin = idx_min_bin + np.ma.argmax(
+                np.ma.array(count_bin, mask=mask_bin)[idx_min_bin:idx_max_bin], 
+                fill_value=-np.inf)
+
+            # Initial guess
+            initial_guess = (1, idx_src_bin, fwhm)
+
+            x_bin = idx_min_bin + np.arange(idx_max_bin + 1 - idx_min_bin)
+            # Normalize
+            y_bin = count_bin[idx_min_bin:(idx_max_bin + 1)] / count_bin[idx_src_bin]
+            m_bin = mask_bin[idx_min_bin:(idx_max_bin + 1)]
+
+            # Gaussian fitting
+            try:
+                refined_trace[i] = _center1D_Gaussian(
+                    x_bin[~m_bin], y_bin[~m_bin], initial_guess, 0)
+
+            except (RuntimeError, TypeError, OptimizeWarning): # raise exception here
+                continue
+
+        for i in range(reference_bin - 1, -1, -1):
+
+            # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
+            # unmasked elements in ``count_bin`` and may cause an error in the 
+            # Gaussian fitting below.
+            count_bin = np.nanmedian(
+                data_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
+            mask_bin = np.all(mask_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
+
+            # Peak range
+            idx_ref = np.where(~np.isnan(refined_trace))[0].min()
+            idx_min_bin = int(refined_trace[idx_ref] - 0.5 * fwhm)
+            idx_max_bin = int(refined_trace[idx_ref] + 0.5 * fwhm)
+
+            # Peak center
+            idx_src_bin = idx_min_bin + np.ma.argmax(
+                np.ma.array(count_bin, mask=mask_bin)[idx_min_bin:idx_max_bin], 
+                fill_value=-np.inf)
+
+            # Initial guess
+            initial_guess = (1, idx_src_bin, fwhm)
+
+            x_bin = idx_min_bin + np.arange(idx_max_bin + 1 - idx_min_bin)
+            # Normalize
+            y_bin = count_bin[idx_min_bin:(idx_max_bin + 1)] / count_bin[idx_src_bin]
+            m_bin = mask_bin[idx_min_bin:(idx_max_bin + 1)]
+
+            # Gaussian fitting
+            try:
+                refined_trace[i] = _center1D_Gaussian(
+                    x_bin[~m_bin], y_bin[~m_bin], initial_guess, 0)
+
+            except (RuntimeError, TypeError, OptimizeWarning): # raise exception here
+                continue
+
+        mask = np.isnan(refined_trace)
+        
+        # Spline fitting
+        spl, residual, threshold_lower, threshold_upper, master_mask = Spline1D(
+            x=loc_bin, y=refined_trace, weight=None, mask=mask, order=3, n_piece=n_piece, 
+            n_iter=n_iter, sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
+            use_relative=False)
+
+        fitted_trace = spl(idx_col)
+        
+    _validateBool(show, 'show')
+
+    _validateString(title, 'title')
+    if title != 'trace':
+        title = f'{title} trace'
+
+    fig_path = _validatePath(save, path, title)
+
+    if show | save:
+        
+        if method == 'trace':
+            plotFitting(
+                x=loc_bin, y=refined_trace, residual=residual, mask=master_mask, 
+                x_fit=idx_col, y_fit=fitted_trace, threshold_lower=threshold_lower, 
+                threshold_upper=threshold_upper, xlabel='dispersion axis [px]', 
+                ylabel='spatial axis [px]', title=title, show=show, save=save, 
+                path=path, use_relative=False)
+
+        extent = (0.5, data_arr.shape[1] + 0.5, 0.5, data_arr.shape[0] + 0.5)
+
+        fig = plt.figure(figsize=(6, 6), dpi=100)
+        gs = gridspec.GridSpec(3, 1)
+        ax = fig.add_subplot(gs[0]), fig.add_subplot(gs[1:])
+        # Subplot 1
+        ax[0].step(idx_row, count_ref, 'k-', lw=1.5, where='mid')
+        ax[0].axvline(x=center_ref, color='r', ls='--', lw=1.5)
+        if method == 'trace':
+            ax[0].axvline(x=idx_min_ref, color='b', ls='--', lw=1.5)
+            ax[0].axvline(x=idx_max_ref, color='b', ls='--', lw=1.5)
+        # Settings
+        ax[0].grid(axis='both', color='0.95', zorder=-1)
+        # ax[0].set_yscale('log')
+        ax[0].set_xlim(center_ref - 10 * fwhm, center_ref + 10 * fwhm)
+        ax[0].tick_params(
+            which='major', direction='in', top=True, right=True, length=5, width=1.5, 
+            labelsize=12)
+        ax[0].set_xlabel('spatial axis [px]', fontsize=16)
+        ax[0].set_ylabel('pixel value', fontsize=16)
+        # Subplot 2
+        _plot2d(
+            ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, extent=extent, 
+            cbar=False)
+        (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
+        ax[1].plot(idx_col + 1, fitted_trace + 1, 'r-', lw=1.5)
+        # Settings
+        ax[1].set_xlim(xmin, xmax)
+        ax[1].set_ylim(ymin, ymax)
+        fig.suptitle(title, fontsize=16)
+        fig.tight_layout()
+
+        if save: plt.savefig(fig_path, dpi=100)
+
+        if show: plt.show()
+
+        plt.close()
+
+    header = deepcopy(nccd.header)
+    header['TRINTERV'] = f'{interval}'
+    header['TRCENTER'] = center_ref
+    header['TRACE'] = '{} Trace ({}, n_med = {}, n_piece = {})'.format(
+        Time.now().to_value('iso', subfmt='date_hm'), method, n_med, n_piece)
+    meta = {'header': header}
+
+    # No uncertainty or mask frame
+    trace1d = Spectrum1D(flux=(fitted_trace * u.pixel), meta=meta)
+
+    return trace1d
+
 # todo: doc
-def trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_iter=5, 
+def _trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_iter=5, 
           sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
           title='trace', show=conf.show, save=conf.save, path=conf.path):
     """Trace on the 2-dimensional spectrum.
@@ -1049,7 +1353,7 @@ def trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_it
 
     if interval is None:
         interval = (0, None)
-
+        
     else:
         interval = _validate1DArray(interval, 'interval', 2, False)
 
@@ -1107,11 +1411,11 @@ def trace(ccd, slit_along, fwhm, method, interval=None, n_med=3, n_piece=3, n_it
         for i in range(n_bin):
 
             # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
-            # unmasked elements in ``count_med`` and may cause an error in the 
+            # unmasked elements in ``count_bin`` and may cause an error in the 
             # Gaussian fitting below.
             count_bin = np.nanmedian(
-                data_arr[:, bin_edges[i][0]:bin_edges[i][-1]], axis=1)
-            mask_bin = np.all(mask_arr[:, bin_edges[i][0]:bin_edges[i][-1]], axis=1)
+                data_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
+            mask_bin = np.all(mask_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
 
             # Peak center
             idx_src_bin = idx_min_med + np.ma.argmax(
