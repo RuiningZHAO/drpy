@@ -967,10 +967,9 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
           path=conf.path):
     """Trace on the 2-dimensional spectrum.
     
-    First the profiles along slit axis are binned by taking median along the dispersion 
-    axis. Then the center of the specified feature (that is the strongest one in the 
-    specified interval) in the middle bin is determined by fitting a Gaussian profile. 
-    [...]
+    First the spatial profiles are binned by taking median along the dispersion axis. 
+    Then the center of the specified feature (that is the strongest one in the 
+    interval) in the reference bin is determined by fitting a Gaussian profile. [...]
     
     Parameters
     ----------
@@ -993,7 +992,8 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
         guess for bin by bin Gaussian fittings.
     
     n_med : int, optional
-        Number of profiles to median. Must be >= `3`. Large number for faint source.
+        Number of spatial profiles to median. Must be >= `3`. Large number for faint 
+        source.
         Default is `3`.
     
     reference_bin : int or `None`, optional
@@ -1473,8 +1473,9 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
     return nccd
 
 
-def extract(ccd, slit_along, trace1d, aper_width, n_aper=1, spectral_axis=None, 
-            title='aperture', show=conf.show, save=conf.save, path=conf.path):
+def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper=1, 
+            spectral_axis=None, title='aperture', show=conf.show, save=conf.save, 
+            path=conf.path):
     """Extract 1-dimensional spectra.
     
     Parameters
@@ -1489,11 +1490,24 @@ def extract(ccd, slit_along, trace1d, aper_width, n_aper=1, spectral_axis=None,
     trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray`
         Input trace.
     
-    aper_width : scalar or 2-tuple, optional
+    aper_width : scalar or 2-tuple
         Aperture width.
     
+    method : str
+        Extraction method. `optimal` or `sum`, and
+        - if `optimal`, the optimal extraction algorithm will be used. The spatial 
+        profile will be normalized to unity within ``psf_width``, and then pixels 
+        within ``aper_width`` will be used to compute the source flux. Only one 
+        spectrum will be extracted regardless of ``n_aper``.
+        - if `sum`, the source flux from the pixels within ``aper_width`` will be 
+        summed.
+    
+    psf_width : scalar or 2-tuple or `None`, optional
+        Width of the point spread function (used by the optimal extraction algorithm). 
+        If `None`, it will be set equal to ``aper_width``.
+    
     n_aper : int, optional
-        Number of sub-apertures.
+        Number of sub-apertures (used by the summation extraction algorithm).
         Default is `1`.
 
     spectral_axis : `~astropy.units.Quantity` or `None`
@@ -1522,69 +1536,94 @@ def extract(ccd, slit_along, trace1d, aper_width, n_aper=1, spectral_axis=None,
     if isinstance(trace1d, Spectrum1D):
         trace1d = trace1d.flux.value
     trace1d = _validate1DArray(trace1d, 'trace1d', n_col, True)
-
-    aper_width = _validateAperture(aper_width)
     
-    _validateInteger(n_aper, 'n_aper', (1, None), (True, None))
-
     # The total aperture width is the sum of ``aper_width[0]`` and ``aper_width[1]``. 
     # If they have opposite signs, the whole aperture will be on one side of the trace.
-    aper_edges = trace1d + np.linspace(
-        -aper_width[0], aper_width[1], n_aper + 1)[:, np.newaxis]
-
-    # Out-of-range problem can be ignored in background modeling while cannot here.
-    if (aper_edges.min() < -0.5) | (aper_edges.max() > n_row - 0.5):
-        raise ValueError('Aperture edge is out of range.')
-
-    data_aper = np.zeros((n_aper, n_col))
-
-    uncertainty_aper = np.zeros((n_aper, n_col)) # !!! Variance !!!
+    aper_width = _validateAperture(aper_width, 'aper_width')
+    aper_width[0] *= -1; aper_width.sort()
     
-    mask_aper = np.zeros((n_aper, n_col), dtype=bool)
+    _validateString(method, 'method', ['optimal', 'sum'])
+    
+    if method == 'optimal':
+        
+        if psf_width is None:
+            psf_width = aper_width
+        else:
+            psf_width = _validateAperture(psf_width, 'psf_width')
+            psf_width[0] *= -1; psf_width.sort()
+            if (psf_width[0] > aper_width[0]) | (psf_width[1] < aper_width[1]):
+                raise ValueError('``aper_width`` should be <= ``psf_width.')
+        
+        psf_edges = np.vstack([np.round(trace1d).astype(int) + round(psf_width[0]), 
+                               np.round(trace1d).astype(int) + round(psf_width[1])]).T
+        
+        psf_arr = np.zeros(((psf_edges[0][1] - psf_edges[0][0] + 1), n_col))
+        for i, psf_edge in enumerate(psf_edges):
+            psf_arr[:, i] = data_arr[psf_edge[0]:(psf_edge[1] + 1), i]
+        
+        # aper_edges = trace1d + np.array([aper_width[0], aper_width[1]])[:, np.newaxis]
+        print(psf_arr)
+        
+    else:
+        
+        _validateInteger(n_aper, 'n_aper', (1, None), (True, None))
+        
+        aper_edges = trace1d + np.linspace(
+            aper_width[0], aper_width[1], n_aper + 1)[:, np.newaxis]
 
-    for i in idx_col:
+        # Out-of-range problem can be ignored in background modeling while cannot here.
+        if (aper_edges.min() < -0.5) | (aper_edges.max() > n_row - 0.5):
+            raise ValueError('Aperture edge is out of range.')
 
-        aper_start, aper_end = aper_edges[:-1, i], aper_edges[1:, i]
+        data_aper = np.zeros((n_aper, n_col))
 
-        for j in range(n_aper):
+        uncertainty_aper = np.zeros((n_aper, n_col)) # !!! Variance !!!
 
-            # Internal pixels
-            mask = (aper_start[j] < idx_row - 0.5) & (idx_row + 0.5 < aper_end[j])
-            data_aper[j, i] = data_arr[mask, i].sum()
-            uncertainty_aper[j, i] = np.sum(uncertainty_arr[mask, i]**2)
-            mask_aper[j, i] = np.any(mask_arr[mask, i])
+        mask_aper = np.zeros((n_aper, n_col), dtype=bool)
 
-            # Edge pixels
+        for i in idx_col:
 
-            # ``idx_start`` labels the pixel where ``aper_start`` is in
-            idx_start = idx_row[idx_row - 0.5 <= aper_start[j]][-1]
+            aper_start, aper_end = aper_edges[:-1, i], aper_edges[1:, i]
 
-            # ``idx_end`` labels the pixel where ``aper_end`` is in
-            idx_end = idx_row[idx_row + 0.5 >= aper_end[j]][0]
-            
-            # ``aper_start`` and ``aper_end`` are in the same pixel
-            if idx_start == idx_end:
-                data_aper[j, i] += (
-                    data_arr[idx_end, i] * (aper_end[j] - aper_start[j]))
-                uncertainty_aper[j, i] += (
-                    uncertainty_arr[idx_end, i] * (aper_end[j] - aper_start[j]))**2
-                mask_aper[j, i] |= mask_arr[idx_end, i]
+            for j in range(n_aper):
 
-            # in different pixels
-            else:
-                data_aper[j, i] += (
-                    data_arr[idx_start, i] * (idx_start + 0.5 - aper_start[j])
-                    + data_arr[idx_end, i] * (aper_end[j] - (idx_end - 0.5))
-                )
-                uncertainty_aper[j, i] += (
-                    (uncertainty_arr[idx_start, i]
-                     * (idx_start + 0.5 - aper_start[j]))**2 
-                    + (uncertainty_arr[idx_end, i] 
-                       * (aper_end[j] - (idx_end - 0.5)))**2
-                )
-                mask_aper[j, i] |= mask_arr[idx_start, i] | mask_arr[idx_end, i]
+                # Internal pixels
+                mask = (aper_start[j] < idx_row - 0.5) & (idx_row + 0.5 < aper_end[j])
+                data_aper[j, i] = data_arr[mask, i].sum()
+                uncertainty_aper[j, i] = np.sum(uncertainty_arr[mask, i]**2)
+                mask_aper[j, i] = np.any(mask_arr[mask, i])
 
-    uncertainty_aper = np.sqrt(uncertainty_aper) # Standard deviation
+                # Edge pixels
+
+                # ``idx_start`` labels the pixel where ``aper_start`` is in
+                idx_start = idx_row[idx_row - 0.5 <= aper_start[j]][-1]
+
+                # ``idx_end`` labels the pixel where ``aper_end`` is in
+                idx_end = idx_row[idx_row + 0.5 >= aper_end[j]][0]
+
+                # ``aper_start`` and ``aper_end`` are in the same pixel
+                if idx_start == idx_end:
+                    data_aper[j, i] += (
+                        data_arr[idx_end, i] * (aper_end[j] - aper_start[j]))
+                    uncertainty_aper[j, i] += (
+                        uncertainty_arr[idx_end, i] * (aper_end[j] - aper_start[j]))**2
+                    mask_aper[j, i] |= mask_arr[idx_end, i]
+
+                # in different pixels
+                else:
+                    data_aper[j, i] += (
+                        data_arr[idx_start, i] * (idx_start + 0.5 - aper_start[j])
+                        + data_arr[idx_end, i] * (aper_end[j] - (idx_end - 0.5))
+                    )
+                    uncertainty_aper[j, i] += (
+                        (uncertainty_arr[idx_start, i]
+                         * (idx_start + 0.5 - aper_start[j]))**2 
+                        + (uncertainty_arr[idx_end, i] 
+                           * (aper_end[j] - (idx_end - 0.5)))**2
+                    )
+                    mask_aper[j, i] |= mask_arr[idx_start, i] | mask_arr[idx_end, i]
+
+        uncertainty_aper = np.sqrt(uncertainty_aper) # Standard deviation
 
     _validateBool(show, 'show')
 

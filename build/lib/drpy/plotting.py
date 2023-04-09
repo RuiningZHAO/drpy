@@ -164,7 +164,7 @@ def _plotSpectrum1D(ax, spectral_axis, flux, uncertainty=None, xlabel='spectral 
     ax.set_xlabel(xlabel, fontsize=16)
     ax.set_ylabel(ylabel, fontsize=16)
     
-# todo: add mask, add legend?
+# todo: label masked pixels, add legend?
 def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save, 
                    path=conf.path):
     """Plot 1-dimensional spectrum of type `~specutils.Spectrum1D`.

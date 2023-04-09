@@ -398,26 +398,26 @@ def _validateBins(bins, length):
     return bin_edges
 
 
-def _validateAperture(aper_width):
+def _validateAperture(aperture, name):
     """Validate aperture width."""
 
-    if np.ndim(aper_width) == 0:
+    if np.ndim(aperture) == 0:
 
-        _validateRange(aper_width, 'aper_width', (0, None), (False, None))
+        _validateRange(aperture, name, (0, None), (False, None))
 
-        aper_width = _validate1DArray(aper_width, 'aper_width', 2, True) / 2
+        aperture = _validate1DArray(aperture, name, 2, True) / 2
 
-    elif np.ndim(aper_width) == 1:
+    elif np.ndim(aperture) == 1:
 
-        aper_width = _validate1DArray(aper_width, 'aper_width', 2, True)
+        aperture = _validate1DArray(aperture, name, 2, True)
 
         _validateRange(
-            aper_width.sum(), 'aper_width.sum()', (0, None), (False, None))
+            aperture.sum(), f'{name}.sum()', (0, None), (False, None))
 
     else:
-        raise ValueError('``aper_width`` must be 1-dimensional, when an array')
+        raise ValueError(f'``{name}`` must be 1-dimensional, when an array')
 
-    return aper_width
+    return aperture
 
 
 def _validatePath(save, path, title):

@@ -8,8 +8,10 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.nddata import CCDData
 # ccdproc
-from ccdproc import (trim_image, combine, subtract_bias, create_deviation, 
-                     flat_correct, cosmicray_lacosmic, cosmicray_median)
+import ccdproc
+from ccdproc import (create_deviation, 
+                     cosmicray_lacosmic, 
+                     cosmicray_median)
 # drpy
 from drpy import conf
 from drpy.utils import imstatistics
@@ -17,6 +19,7 @@ from drpy.validate import _validateBool, _validateString
 
 # Configurations
 unit_ccddata = u.Unit(conf.unit_ccddata)
+dtype_ccddata = np.dtype(conf.dtype_ccddata)
 
 __all__ = ['CCDDataList']
 
@@ -25,7 +28,7 @@ class CCDDataList:
     """A class for batch processing."""
 
     @classmethod
-    def read(cls, file_list, hdu=1, unit=unit_ccddata):
+    def read(cls, file_list, hdu=1, unit=unit_ccddata, dtype=dtype_ccddata):
         """Construct a `CCDDataList` object from a list of files.
         
         Parameters
@@ -41,6 +44,10 @@ class CCDDataList:
             Unit of the image data.
             Default is `~astropy.units.adu`.
 
+        dtype : `type` or `str`, optional
+            Data type of the image data.
+            Default is `~numpy.float32`.
+
         Returns
         -------
         ccddatalist : `CCDDataList`
@@ -49,8 +56,17 @@ class CCDDataList:
 
         ccddatalist = list()
         for file_name in file_list:
+
             # Load from file
             ccd = CCDData.read(file_name, hdu=hdu, unit=unit)
+
+            # Convert to specified data type
+            if ccd.data is not None:
+                ccd.data = ccd.data.astype(dtype)
+
+            if ccd.uncertainty is not None:
+                ccd.uncertainty.arraye = ccd.uncertainty.array.astype(dtype)
+
             # Add or rewrite keyword `FILENAME` (used in `self.statistics`).
             ccd.header['FILENAME'] = os.path.split(file_name)[1]
             ccddatalist.append(ccd)
@@ -81,196 +97,342 @@ class CCDDataList:
         self._ccddatalist = deepcopy(ccddatalist)   
 
 
-    def trim(self, row_range, col_range, **kwargs):
-        """Trim images.
-
+    def apply_over_ccd(self, func, *args, **kwargs):
+        """Apply a function repeatedly over all the images.
+        
         Parameters
         ----------
-        row_range : array_like
-            Row range (python style).
+        func : function
+            This function must take the to-be-processed image as its first argument.
+        
+        *args : tuple, optional
+            Positional arguments passed through to ``func``.
 
-        col_range : array_like
-            Column range (python style).
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``func``.
         
         Returns
         -------
         ccddatalist : `CCDDataList`
-            Trimmed images.
+            Processed images.
         """
-        
+
         ccddatalist = list()
+
         for ccd in self._ccddatalist:
-            ccddatalist.append(
-                trim_image(
-                    ccd=ccd[row_range[0]:row_range[1], col_range[0]:col_range[1]], 
-                    **kwargs
+
+            ccddatalist.append(func(ccd, *args, **kwargs))
+
+        ccddatalist = self.__class__(ccddatalist)
+
+        return ccddatalist
+
+
+    def transform_image(self, *args, **kwargs):
+        """Transform images.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.transform_image``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.transform_image``.
+        """
+
+        return self.apply_over_ccd(ccdproc.transform_image, *args, **kwargs)
+
+    
+    def trim_image(self, *args, **kwargs):
+        """Trim images to the dimensions indicated.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.trim_image``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.trim_image``.
+        """
+
+        return self.apply_over_ccd(ccdproc.trim_image, *args, **kwargs)
+
+
+    def wcs_project(self, *args, **kwargs):
+        """Project images onto a target WCS.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.wcs_project``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.wcs_project``.
+        """
+
+        return self.apply_over_ccd(ccdproc.wcs_project, *args, **kwargs)
+
+
+    def subtract_bias(self, master, **kwargs):
+        """Subtract master bias from images.
+        
+        Parameters
+        ----------
+        master : `~astropy.nddata.CCDData`
+            Master image to be subtracted from input images.
+        
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.subtract_bias``.
+        
+        Returns
+        -------
+        ccddatalist : `CCDDataList`
+            `CCDDataList` object with bias subtracted.
+        """
+
+        if 'add_keyword' not in kwargs:
+
+            keywords_dict = {
+                'ZEROCOR': '{} A level of {} is subtracted'.format(
+                    Time.now().to_value('iso', subfmt='date_hm'), 
+                    round(np.nanmean(master.data))
                 )
-            )
-        
-        ccddatalist = self.__class__(ccddatalist)
+            }
+
+            ccddatalist =  self.apply_over_ccd(
+                ccdproc.subtract_bias, master, add_keyword=keywords_dict, **kwargs)
+
+        else:
+
+            ccddatalist = self.apply_over_ccd(ccdproc.subtract_bias, master, **kwargs)
         
         return ccddatalist
 
 
-    def combine(self, method, **kwargs):
-        """Combine images.
+    def subtract_dark(self, *args, **kwargs):
+        """Subtract dark current from images.
         
         Parameters
         ----------
-        method : `str`
-            `average`, `median`, or `sum`.
-        
-        Returns
-        -------
-        combined_ccd : `~astropy.nddata.CCDData`
-            Combined frame.
-        """
-        
-        combined_ccd = combine(
-            img_list=self._ccddatalist, method=method, **kwargs)
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.subtract_dark``.
 
-        combined_ccd.header = self._ccddatalist[0].header
-        combined_ccd.header['NCOMBINE'] = (self.__len__(), 'number of frames combined')
-        
-        return combined_ccd
-
-
-    def subtract(self, master):
-        """Subtract ``master`` frame from the `CCDDataList` object.
-
-        Parameters
-        ----------
-        master : `~astropy.nddata.CCDData`
-            Image to be subtracted from the `CCDDataList` object. Usually a master bias.
-
-        Returns
-        -------
-        ccddatalist : `CCDDataList`
-            `CCDDataList` object with ``master`` subtracted.
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.subtract_dark``.
         """
 
-        if not isinstance(master, CCDData):
-            raise TypeError(
-                f'Invalid type `{type(master)}` for ``master``. '
-                '`~astropy.nddata.CCDData` is expected.')
+        return self.apply_over_ccd(ccdproc.subtract_dark, *args, **kwargs)
 
-        keywords_dict = {
-            'ZEROCOR': '{} A level of {} is subtracted'.format(
-                Time.now().to_value('iso', subfmt='date_hm'), round(master.data.mean()))
-        }
 
-        ccddatalist = list()
-        for ccd in self._ccddatalist:
-            ccddatalist.append(
-                subtract_bias(ccd=ccd, master=master, add_keyword=keywords_dict)
-            )
-        ccddatalist = self.__class__(ccddatalist)
-
-        return ccddatalist
-
-    # todo: use min_value to get rid of negative values ???
-    def divide(self, master, min_value=None, norm_value=None):
-        """Divide ``master`` from the `CCDDataList` object.
-
+    def subtract_overscan(self, *args, **kwargs):
+        """Subtract the overscan region from images.
+        
         Parameters
         ----------
-        master : `~astropy.nddata.CCDData`
-            Image to be divided from the `CCDDataList` object. Usually a master flat.
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.subtract_overscan``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.subtract_overscan``.
+        """
+
+        return self.apply_over_ccd(ccdproc.subtract_overscan, *args, **kwargs)
+
+
+    def flat_correct(self, flat, min_value=None, norm_value=None, **kwargs):
+        """Correct images for flat fielding.
         
+        Parameters
+        ----------
+        flat : `~astropy.nddata.CCDData`
+            Flat field to apply to the data.
+
         min_value : float or `None`, optional
-            Minimum value for flat field. The value can either be None and no minimum 
+            Minimum value for flat field. The value can either be `None` and no minimum 
             value is applied to the flat or specified by a float which will replace all 
-            values in the flat by the min_value. 
+            values in the flat by the min_value.
             Default is `None`.
 
         norm_value : float or `None`, optional
             If not `None`, normalize flat field by this argument rather than the mean 
             of the image. This allows fixing several different flat fields to have the 
-            same scale. If this value is negative or 0, a `ValueError` is raised. 
+            same scale. If this value is negative or `0`, a `ValueError` is raised. 
             Default is `None`.
-
+        
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.flat_correct``.
+        
         Returns
         -------
         ccddatalist : `CCDDataList`
-            `CCDDataList` object with ``master`` divided.
+            `CCDDataList` object with flat corrected.
         """
 
-        if not isinstance(master, CCDData):
-            raise TypeError(
-                f'Invalid type `{type(master)}` for ``master``. '
-                '`~astropy.nddata.CCDData` is expected.')
+        if 'add_keyword' not in kwargs:
 
-        keywords_dict = {
-            'FLATCOR': '{} flat-fielded'.format(
-                Time.now().to_value('iso', subfmt='date_hm'))
-        }
+            keywords_dict = {
+                'FLATCOR': '{} flat-fielded'.format(
+                    Time.now().to_value('iso', subfmt='date_hm'))
+            }
 
-        ccddatalist = list()
-        for ccd in self._ccddatalist:
-            ccddatalist.append(
-                flat_correct(
-                    ccd=ccd, flat=master, min_value=min_value, norm_value=norm_value, 
-                    add_keyword=keywords_dict)
-            )
-        ccddatalist = self.__class__(ccddatalist)
+            ccddatalist = self.apply_over_ccd(
+                ccdproc.flat_correct, flat, min_value, norm_value, 
+                add_keyword=keywords_dict, **kwargs)
+
+        else:
+
+            ccddatalist = self.apply_over_ccd(
+                ccdproc.flat_correct, flat, min_value, norm_value, **kwargs)
 
         return ccddatalist
 
 
-    def create_deviation(self, gain, readnoise, **kwargs):
-        """Create deviation.
-
+    def create_deviation(self, *args, **kwargs):
+        """Create uncertainty frames.
+        
         Parameters
         ----------
-        gain : scalar
-            Gain in [e- / adu].
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.create_deviation``.
 
-        noise : scalar
-            Read noise in [e-].
-
-        Returns
-        -------
-        ccddatalist : `CCDDataList`
-            `CCDDataList` object with uncertainty assigned.
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.create_deviation``.
         """
 
-        ccddatalist = list()
-        for ccd in self._ccddatalist:
-            # the pre-assigned uncertainties will be replaced by new ones 
-            ccddatalist.append(
-                create_deviation(
-                    ccd_data=ccd, gain=(gain * u.electron / u.adu), 
-                    readnoise=(readnoise * u.electron), **kwargs)
-            )
-        ccddatalist = self.__class__(ccddatalist)
-
-        return ccddatalist
+        return self.apply_over_ccd(ccdproc.create_deviation, *args, **kwargs)
 
 
-    def cosmicray(self, method, use_mask=False, gain=None, readnoise=None, 
-                  gain_apply=False, **kwargs):
+    def gain_correct(self, *args, **kwargs):
+        """Correct gain in images.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.gain_correct``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.gain_correct``.
+        """
+
+        return self.apply_over_ccd(ccdproc.gain_correct, *args, **kwargs)
+
+
+    def ccd_process(self, *args, **kwargs):
+        """Perform basic processing on ccd data.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.ccd_process``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.ccd_process``.
+        """
+
+        return self.apply_over_ccd(ccdproc.ccd_process, *args, **kwargs)
+
+
+    def combine(self, *args, **kwargs):
+        """Combine images.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.combine``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.combine``.
+        
+        Returns
+        -------
+        combined_ccd : `~astropy.nddata.CCDData`
+            Combined image.
+        """
+        
+        combined_ccd = ccdproc.combine(img_list=self._ccddatalist, *args, **kwargs)
+
+        combined_ccd.header = self._ccddatalist[0].header
+        combined_ccd.header['NCOMBINE'] = (self.__len__(), 'number of images combined')
+        
+        return combined_ccd
+
+
+    def add(self, *args, **kwargs):
+        """Perform addition.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~astropy.nddata.CCDData.add``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~astropy.nddata.CCDData.add``.
+        """
+
+        return self.apply_over_ccd(CCDData.add, *args, **kwargs)
+
+
+    def subtract(self, *args, **kwargs):
+        """Perform subtraction.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~astropy.nddata.CCDData.subtract``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~astropy.nddata.CCDData.subtract``.
+        """
+
+        return self.apply_over_ccd(CCDData.subtract, *args, **kwargs)
+
+
+    def multiply(self, *args, **kwargs):
+        """Perform multiplication.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~astropy.nddata.CCDData.multiply``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~astropy.nddata.CCDData.multiply``.
+        """
+
+        return self.apply_over_ccd(CCDData.multiply, *args, **kwargs)
+
+
+    def divide(self, *args, **kwargs):
+        """Perform division.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~astropy.nddata.CCDData.divide``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~astropy.nddata.CCDData.divide``.
+        """
+
+        return self.apply_over_ccd(CCDData.divide, *args, **kwargs)
+
+
+    def cosmicray_lacosmic(self, use_mask=False, *args, **kwargs):
         """Remove cosmic rays.
         
         Parameters
         ----------
-        method : str
-            `Laplacian` or `median`. Cosmic ray removal method.
-
         use_mask : bool, optional
             If `True`, the attributed mask frames are used in identifying cosmic ray 
-            pixels. (only useful for `Laplacian` method)
+            pixels.
             Default is `False`.
+        
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.cosmicray_lacosmic``.
 
-        gain : scalar or `None`, optional
-            Gain in [e- / adu].
-
-        readnoise : scalar or `None`, optional
-            Read noise in [e-].
-
-        gain_apply : bool, optional
-            If `True`, return gain-corrected data, with correct units, otherwise do not 
-            gain-correct the data. `False` is recommended.
-
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.cosmicray_lacosmic``.
+        
         Returns
         -------
         ccddatalist : `CCDDataList`
@@ -279,18 +441,10 @@ class CCDDataList:
 
         _validateBool(use_mask, 'use_mask')
 
-        _validateString(method, 'method', ['Laplacian', 'median'])
-
-        if method == 'Laplacian':
-            keywords_dict = {
-                'COSMICRA': '{} Laplacian Edge Detection'.format(
-                    Time.now().to_value('iso', subfmt='date_hm'))
-            }
-        elif method == 'median':
-            keywords_dict = {
-                'COSMICRA': '{} median with sigma clipping'.format(
-                    Time.now().to_value('iso', subfmt='date_hm'))
-            }
+        keywords_dict = {
+            'COSMICRA': '{} Laplacian Edge Detection'.format(
+                Time.now().to_value('iso', subfmt='date_hm'))
+        }
 
         ccddatalist = list()
         for ccd in self._ccddatalist:
@@ -305,23 +459,53 @@ class CCDDataList:
                     nccd.mask = np.zeros_like(nccd.data, dtype=bool)
             else:
                 nccd.mask = None
-            
-            if method == 'Laplacian':
 
-                ccd_cosmicray = cosmicray_lacosmic(
-                    ccd=nccd, gain=gain, readnoise=readnoise, gain_apply=gain_apply, 
-                    **kwargs)
-
-            elif method == 'median':
-
-                ccd_cosmicray = cosmicray_median(ccd=nccd, **kwargs)
-
-            ccd_cosmicray.unit = nccd.unit
+            # Of dtype float32
+            ccd_cosmicray_removed = cosmicray_lacosmic(ccd=nccd, *args, **kwargs)
 
             for key, value in keywords_dict.items():
-                ccd_cosmicray.header[key] = value
+                ccd_cosmicray_removed.header[key] = value
 
-            ccddatalist.append(ccd_cosmicray)
+            ccddatalist.append(ccd_cosmicray_removed)
+
+        ccddatalist = self.__class__(ccddatalist)
+
+        return ccddatalist
+
+
+    def cosmicray_median(self, *args, **kwargs):
+        """Remove cosmic rays.
+        
+        Parameters
+        ----------
+        *args : tuple, optional
+            Positional arguments passed through to ``~ccdproc.cosmicray_median``.
+
+        **kwargs : dict, optional
+            Keyword arguments passed through to ``~ccdproc.cosmicray_median``.
+        
+        Returns
+        -------
+        ccddatalist : `CCDDataList`
+            `CCDDataList` object with cosmic rays removed.
+        """
+
+        keywords_dict = {
+            'COSMICRA': '{} median with sigma clipping'.format(
+                Time.now().to_value('iso', subfmt='date_hm'))
+        }
+
+        ccddatalist = list()
+
+        for ccd in self._ccddatalist:
+
+            ccd_cosmicray_removed = cosmicray_median(ccd=ccd, *args, **kwargs)
+
+            for key, value in keywords_dict.items():
+
+                ccd_cosmicray_removed.header[key] = value
+
+            ccddatalist.append(ccd_cosmicray_removed)
 
         ccddatalist = self.__class__(ccddatalist)
 
@@ -354,6 +538,26 @@ class CCDDataList:
     def copy(self):
         """Return a copy of itself."""
         return self.__class__(self._ccddatalist)
+
+
+    def __add__(self, operand2):
+        """The same as `self.add`."""
+        return self.add(operand2, handle_meta='first_found')
+
+
+    def __sub__(self, operand2):
+        """The same as `self.subtract`."""
+        return self.subtract(operand2, handle_meta='first_found')
+
+
+    def __mul__(self, operand2):
+        """The same as `self.multiply`"""
+        return self.multiply(operand2, handle_meta='first_found')
+
+
+    def __truediv__(self, operand2):
+        """The same as `self.divide`."""
+        return self.divide(operand2, handle_meta='first_found')
 
 
     def __getitem__(self, item):
@@ -392,16 +596,6 @@ class CCDDataList:
         else:
             raise IndexError(
                 f'Invalid type {type(item)} for `CCDDataList` item access.')
-
-
-    def __sub__(self, master):
-        """The same as `self.subtract`."""
-        return self.subtract(master)
-
-
-    def __truediv__(self, master):
-        """The same as `self.divide`."""
-        return self.divide(master)
 
 
     def __repr__(self):
