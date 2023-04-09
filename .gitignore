@@ -1,5 +1,5 @@
 # .gitignore
 bak
-tests/data
+tests
 .venv
 __pycache__
