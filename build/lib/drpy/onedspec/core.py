@@ -30,7 +30,8 @@ __all__ = ['dispcor', 'sensfunc', 'calibrate1d']
 
 def dispcor(spectrum1d, reverse, reference, n_piece=3, refit=True, n_iter=5, 
             sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
-            title='dispcor', show=conf.show, save=conf.save, path=conf.path):
+            title='dispcor', show=conf.fig_show, save=conf.fig_save, 
+            path=conf.fig_path):
     """Dispersion correction.
 
     Parameters
@@ -167,26 +168,27 @@ def dispcor(spectrum1d, reverse, reference, n_piece=3, refit=True, n_iter=5,
             ylabel='dispersion axis [px]', title='dispersion solution', show=show, 
             save=save, path=path, use_relative=False)
 
+    # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'dispcor':
-        title = f'{title} dispcor'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
+        _validateString(title, 'title')
+        if title != 'dispcor':
+            title = f'{title} dispcor'
+
         xlabel = f'spectral axis [{unit_spectral_axis.to_string()}]'
 
-        fig = plt.figure(figsize=(8, 4), dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
+        fig, ax = plt.subplots(1, 1, dpi=100)
+
         # Spectrum
         ax.step(
             spectral_axis, flux + 1, where='mid', color='C0', zorder=3, label='custom')
         ax.step(
             spectral_axis_ref, flux_ref, where='mid', color='C1', zorder=3, 
             label='reference')
+
         # Settings
         ax.grid(axis='both', color='0.95', zorder=-1)
         ax.set_xlim(spectral_axis[0], spectral_axis[-1])
@@ -197,11 +199,15 @@ def dispcor(spectrum1d, reverse, reference, n_piece=3, refit=True, n_iter=5,
         ax.set_ylabel('flux', fontsize=16)
         ax.legend(fontsize=16)
         ax.set_title(title, fontsize=16)
+        fig.set_figheight(0.5 * fig.get_figwidth())
         fig.tight_layout()
         
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 
@@ -227,11 +233,11 @@ def dispcor(spectrum1d, reverse, reference, n_piece=3, refit=True, n_iter=5,
 
     return new_spectrum1d
 
-# todo: slit loss.
+
 def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None, 
              bandsep=None, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, 
-             grow=False, use_mask=False, title='sensfunc', show=conf.show, 
-             save=conf.save, path=conf.path):
+             grow=False, use_mask=False, title='sensfunc', show=conf.fig_show, 
+             save=conf.fig_save, path=conf.fig_path):
     """Create sensitivity function.
     
     Parameters
@@ -473,18 +479,18 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
 
     # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
-        fig = plt.figure(figsize=(6, 4), dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
+        _validateString(title, 'title')
+
+        fig, ax = plt.subplots(1, 1, dpi=100)
+
         # Spectrum
         _plotSpectrum1D(
             ax, wavelength_obs, (flux_obs / bin_width_obs), xlabel='wavelength [A]')
+
         # Bandpasses
         ymin, ymax = ax.get_ylim()
         height = (ymax - ymin) * 0.06
@@ -497,15 +503,22 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
         patch_collection = PatchCollection(
             patches, facecolor='None', edgecolor='r', lw=1.5, zorder=2.5)
         ax.add_collection(patch_collection)
+
+        # Settings
         ax.set_title(title, fontsize=16)
+        fig.set_figheight(fig.get_figwidth() * 2 / 3)
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 
+    # Sensitivity function fitting
     plotFitting(
         x=wavelength, y=sens, residual=residual, mask=master_mask, 
         x_fit=wavelength_obs, y_fit=sens_fit, threshold_lower=threshold_lower, 

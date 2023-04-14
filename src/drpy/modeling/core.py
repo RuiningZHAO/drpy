@@ -108,8 +108,8 @@ def Poly1D(x, y, weight=None, mask=None, degree=1, n_iter=5, sigma_lower=None,
             residual[mask] = np.nan
             residual_masked, threshold_lower, threshold_upper = sigma_clip(
                 data=residual, sigma_lower=sigma_lower, sigma_upper=sigma_upper,
-                maxiters=1, stdfunc='std', axis=None, masked=True, return_bounds=True, 
-                grow=grow)
+                maxiters=1, stdfunc='mad_std', axis=None, masked=True, 
+                return_bounds=True, grow=grow)
             master_mask = residual_masked.mask
 
     return p, residual, threshold_lower, threshold_upper, master_mask
@@ -227,8 +227,8 @@ def Spline1D(x, y, weight=None, mask=None, order=3, n_piece=1, bbox=[None, None]
             residual[mask] = np.nan
             residual_masked, threshold_lower, threshold_upper = sigma_clip(
                 data=residual, sigma_lower=sigma_lower, sigma_upper=sigma_upper,
-                maxiters=1, stdfunc='std', axis=None, masked=True, return_bounds=True, 
-                grow=grow)
+                maxiters=1, stdfunc='mad_std', axis=None, masked=True, 
+                return_bounds=True, grow=grow)
             master_mask = residual_masked.mask
 
     return spl, residual, threshold_lower, threshold_upper, master_mask
@@ -366,8 +366,8 @@ def Spline2D(x, y, z, weight=None, mask=None, order=(3, 3), n_piece=(1, 1),
             residual[mask] = np.nan
             residual_masked, threshold_lower, threshold_upper = sigma_clip(
                 data=residual, sigma_lower=sigma_lower, sigma_upper=sigma_upper,
-                maxiters=1, stdfunc='std', axis=axis, masked=True, return_bounds=True, 
-                grow=grow)
+                maxiters=1, stdfunc='mad_std', axis=axis, masked=True, 
+                return_bounds=True, grow=grow)
             master_mask = residual_masked.mask
 
     return bispl, residual, threshold_lower, threshold_upper, master_mask
@@ -474,8 +474,8 @@ def GaussianSmoothing2D(x, y, z, sigma, mask=None, n_iter=5, sigma_lower=None,
             residual[mask] = np.nan
             residual_masked, threshold_lower, threshold_upper = sigma_clip(
                 data=residual, sigma_lower=sigma_lower, sigma_upper=sigma_upper,
-                maxiters=1, stdfunc='std', axis=axis, masked=True, return_bounds=True,
-                grow=grow)
+                maxiters=1, stdfunc='mad_std', axis=axis, masked=True, 
+                return_bounds=True, grow=grow)
             master_mask = residual_masked.mask
 
     return z_smoothed, residual, threshold_lower, threshold_upper, master_mask

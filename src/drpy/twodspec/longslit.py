@@ -7,8 +7,8 @@ import numpy as np
 from scipy import interpolate, signal, ndimage
 from scipy.optimize import OptimizeWarning
 # matplotlib
-from matplotlib import gridspec
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 # AstroPy
 import astropy.units as u
 from astropy.time import Time
@@ -24,7 +24,7 @@ from drpy.batch import CCDDataList
 from drpy.onedspec import loadExtinctionCurve
 from drpy.onedspec.center import _center1D_Gaussian, _refinePeakBases, _refinePeaks
 from drpy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
-from drpy.plotting import plotFitting, _plot2d, _plotSpectrum1D
+from drpy.plotting import plotFitting, _plotFitting, plot2d, _plot2d, _plotSpectrum1D
 from drpy.validate import (_validateBool, _validateString, _validateRange, 
                            _validateInteger, _validate1DArray, _validateNDArray, 
                            _validateCCDData, _validateCCDList, _validateCCD, 
@@ -34,6 +34,7 @@ from drpy.validate import (_validateBool, _validateString, _validateRange,
 from .utils import invertCoordinateMap
 
 # Set plot parameters
+plt.rcParams['figure.figsize'] = [conf.fig_width, conf.fig_width]
 plt.rcParams['axes.linewidth'] = 1.5
 plt.rcParams['mathtext.fontset'] = 'stix'
 plt.rcParams['font.family'] = 'STIXGeneral'
@@ -43,8 +44,7 @@ __all__ = ['response', 'illumination', 'align', 'fitcoords', 'transform', 'trace
 
 
 def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, 
-             grow=False, use_mask=False, title='response', show=conf.show, 
-             save=conf.save, path=conf.path):
+             grow=False, use_mask=False, plot=True, path=conf.fig_path):
     """Determine response calibration.
 
     Parameters
@@ -106,36 +106,37 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     # Average along spatial (slit) axis
     x = np.arange(n_col)
     # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
-    # elements in ``y`` and may cause an error in the spline fitting below. Bad columns 
-    # will raise warnings but may not cause error.
+    # elements in ``y`` and may cause an error in the spline fitting below.
     y = np.nanmean(data_arr, axis=0)
     mask_y = np.all(mask_arr, axis=0)
 
-    # Fit cubic spline function
+    # Fit cubic spline function (always float64)
     spl, residual, threshold_lower, threshold_upper, master_mask = Spline1D(
         x=x, y=y, weight=None, mask=mask_y, order=3, n_piece=n_piece, n_iter=n_iter, 
         sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, use_relative=True)
-    y_fit = spl(x)
-    uncertainty_y_fit = (y_fit * residual)[~master_mask].std(ddof=1)
+    
+    # Control precision
+    y_fit = spl(x).astype(ccd.dtype)
+    rms_y_fit = (y_fit * residual)[~master_mask].std(dtype=ccd.dtype)
 
-    # Plot
+    # Fitting plot
     plotFitting(
         x=x, y=y, residual=residual, mask=master_mask, x_fit=x, y_fit=y_fit, 
         threshold_lower=threshold_lower, threshold_upper=threshold_upper, 
-        xlabel='dispersion axis [px]', ylabel='pixel value', title=title, 
-        show=show, save=save, path=path, use_relative=True)
+        xlabel='dispersion axis [px]', ylabel='pixel value', title='response', 
+        show=False, save=plot, path=path, use_relative=True)
 
     if slit_along == 'col':
         rccd = CCDData(
             data=(np.tile(y_fit, (n_row, 1)) * nccd.unit), 
-            uncertainty=StdDevUncertainty(np.full((n_row, n_col), uncertainty_y_fit)), 
+            uncertainty=StdDevUncertainty(np.full((n_row, n_col), rms_y_fit)), 
             mask=np.tile(master_mask, (n_row, 1))
         )
 
     else:
         rccd = CCDData(
             data=(np.tile(y_fit, (n_row, 1)).T * nccd.unit), 
-            uncertainty=StdDevUncertainty(np.full((n_col, n_row), uncertainty_y_fit)), 
+            uncertainty=StdDevUncertainty(np.full((n_col, n_row), rms_y_fit)), 
             mask=np.tile(master_mask, (n_row, 1)).T
         )
 
@@ -161,10 +162,10 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
 
     return nccd
 
-# todo: improve multiplot (or plot arrays). doc.
+# todo: doc.
 def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_iter=5, 
                  sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
-                 title='illumination', show=conf.show, save=conf.save, path=conf.path):
+                 plot=conf.fig_save, path=conf.fig_path):
     """Model illumination.
 
     Parameters
@@ -244,13 +245,11 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
 
     # The largest allowed value for bin edge is set to ``n_col`` (or ``n_row`` 
     # depending on ``slit_along``) in order to enable the access to the last column (or 
-    # row), i.e., data_arr[:, bin_edges[0][0]:bin_edges[0][1]].
+    # row), i.e., data_arr[:, bin_edges[-1][0]:bin_edges[-1][1]].
     if slit_along == 'col':
-        bin_edges = _validateBins(bins, n_col)
+        bin_edges, loc_bin, n_bin = _validateBins(bins, n_col)
     else:
-        bin_edges = _validateBins(bins, n_row)
-    n_bin = bin_edges.shape[0]
-    loc_bin = (bin_edges.sum(axis=1) - 1) / 2
+        bin_edges, loc_bin, n_bin = _validateBins(bins, n_row)
     
     _validateString(method, 'method', ['Gaussian2D', 'CubicSpline2D', 'iraf'])
 
@@ -331,8 +330,9 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         
         master_mask |= mask_arr
         
-        uncertainty_arr = np.full(
-            (n_row, n_col), (data_fit * residual)[~master_mask].std(ddof=1))
+        data_fit = data_fit.astype(ccd.dtype)
+        rms_arr = np.full(
+            (n_row, n_col), (data_fit * residual)[~master_mask].std(dtype=ccd.dtype))
 
         # In 2D case, ``loc_bin`` is only used as index, thus converted to ``int``.
         idx_bin = loc_bin.astype(int)
@@ -358,7 +358,7 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         # Apply mask
         data_arr[mask_arr] = np.nan
 
-        uncertainty_arr = np.zeros_like(data_arr)
+        rms_arr = np.zeros_like(data_arr)
         master_mask = np.zeros_like(data_arr, dtype=bool)
 
         bin_data_arr = np.zeros((n_bin, n_row))
@@ -381,41 +381,60 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
                 n_piece=n_piece[i], n_iter=n_iter, sigma_lower=sigma_lower, 
                 sigma_upper=sigma_upper, grow=grow, use_relative=True)
             bin_data_fit[i] = bin_spl(idx_row)
-            uncertainty_arr[:, bin_start:bin_end] = (
-                bin_data_fit[i] * bin_residual[i])[~bin_mask_arr[i]].std(ddof=1)
+            rms_arr[:, bin_start:bin_end] = (
+                bin_data_fit[i] * bin_residual[i])[~bin_mask_arr[i]].std()
             master_mask[bin_mask_arr[i], bin_start:bin_end] = True
         
         # Interpolate
         data_fit = interpolate.interp1d(
             x=loc_bin, y=bin_data_fit.T, axis=1, kind='linear', bounds_error=False, 
-            fill_value='extrapolate', assume_sorted=True)(idx_col)
+            fill_value='extrapolate', assume_sorted=True)(idx_col).astype(ccd.dtype)
 
     if slit_along != 'col':
         data_fit = data_fit.T
-        uncertainty_arr = uncertainty_arr.T
+        rms_arr = rms_arr.T
         master_mask = master_mask.T
         n_col, n_row = n_row, n_col
         idx_col, idx_row = idx_row, idx_col
 
-    # Plot
-    if slit_along == 'col':
-        x = idx_row
-    else:
-        x = idx_col
+    # Fitting plot
+    _validateBool(plot, 'plot')
 
-    for i in range(n_bin):
-        plotFitting(
-            x=x, y=bin_data_arr[i], residual=bin_residual[i], mask=bin_mask_arr[i], 
-            x_fit=x, y_fit=bin_data_fit[i], threshold_lower=bin_threshold_lower[i], 
-            threshold_upper=bin_threshold_upper[i], xlabel='spatial axis [px]', 
-            ylabel='pixel value', title=f'{title} at {slit_along} {loc_bin[i]}', 
-            show=show, save=save, path=path, use_relative=True)
+    if plot:
+
+        if slit_along == 'col':
+            x = idx_row
+        else:
+            x = idx_col
+
+        fig_path = _validatePath(path, 'illumination fitting', '.pdf')
+        with PdfPages(fig_path, keep_empty=False) as pdf:
+
+            for i in range(n_bin):
+
+                fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
+                fig.subplots_adjust(hspace=0)
+
+                _plotFitting(
+                    ax=ax, x=x, y=bin_data_arr[i], residual=bin_residual[i], 
+                    mask=bin_mask_arr[i], x_fit=x, y_fit=bin_data_fit[i], 
+                    threshold_lower=bin_threshold_lower[i], 
+                    threshold_upper=bin_threshold_upper[i], xlabel='spatial axis [px]', 
+                    ylabel='pixel value', use_relative=True)
+
+                ax[0].set_title(f'profile at column {loc_bin[i]}', fontsize=16)
+                fig.align_ylabels()
+                fig.tight_layout()
+
+                pdf.savefig(fig, dpi=100)
+
+                plt.close()
     
     # Illumination
     nccd.data = deepcopy(data_fit)
 
     if nccd.uncertainty is not None:
-        nccd.uncertainty.array = deepcopy(uncertainty_arr)
+        nccd.uncertainty.array = deepcopy(rms_arr)
 
     if nccd.mask is not None:
         nccd.mask[master_mask] = True
@@ -523,10 +542,10 @@ def align(ccdlist, slit_along, index=0):
 
     return CCDDataList(nccdlist)
 
-# todo: improve multiplot
+
 def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_iter=5, 
               sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
-              show=conf.show, save=conf.save, path=conf.path, **kwargs):
+              plot=conf.fig_save, path=conf.fig_path, **kwargs):
     """Fit distortion across the slit.
     
     Parameters
@@ -597,14 +616,10 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
     # Apply mask
     data_arr[mask_arr] = np.nan
-
-    _validateInteger(n_med, 'n_med', (1, None), (True, None))
     
     # Split into bins along spatial (slit) axis
-    bin_edges = np.hstack([np.arange(0, n_row, n_med), n_row])
-    bin_edges = np.vstack([bin_edges[:-1], bin_edges[1:]]).T
-    n_bin = bin_edges.shape[0]
-    loc_bin = (bin_edges.sum(axis=1) - 1) / 2
+    _validateInteger(n_med, 'n_med', (1, None), (True, None))
+    bin_edges, loc_bin, n_bin = _validateBins(n_med, n_row, isWidth=True)
 
     bin_data_arr = np.zeros((n_bin, n_col))
 
@@ -668,12 +683,13 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
         U = idx_col + shift_fit[:, np.newaxis]
 
+        # Fitting plot
         plotFitting(
             x=loc_bin, y=shift_arr, residual=residual, mask=mask, x_fit=idx_row, 
             y_fit=shift_fit, threshold_lower=threshold_lower, 
             threshold_upper=threshold_upper, xlabel='spatial axis [px]', 
-            ylabel='shift value [px]', title='zeropoint shift curve', show=show, 
-            save=save, path=path, use_relative=False)
+            ylabel='shift value [px]', title='zeropoint shift curve', show=False, 
+            save=plot, path=path, use_relative=False)
 
     else:
 
@@ -767,15 +783,16 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
         # !!! Extrapolation is used here (see above) !!!
         U = bispl(idx_col, idx_row, grid=True).T
 
-        _validateBool(show, 'show')
+        # Plot
+        _validateBool(plot, 'plot')
 
-        title = ['peak detection', 'distortion residual']
+        if plot:
+            
+            # Peak detection plot
+            title = 'peak detection'
+            
+            fig = plt.figure(dpi=100)
 
-        fig_path = _validatePath(save, path, title)
-
-        if show | save:
-
-            fig = plt.figure(figsize=(6, 6), dpi=100)
             # Split into subplots
             n_subplot = 2
             length = n_col // n_subplot + 1
@@ -783,6 +800,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
                 idx_start, idx_end = i * length, (i + 1) * length
                 idx_peak = np.where((idx_start <= peaks) & (peaks < idx_end))[0]
                 ax = fig.add_subplot(n_subplot, 1, i + 1)
+
                 ax.step(
                     idx_col[idx_start:idx_end], bin_data_mean[idx_start:idx_end], 
                     color='k', ls='-', where='mid')
@@ -790,6 +808,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
                     ymin = heights[idx] * 1.2
                     ymax = heights[idx] * 1.5
                     ax.plot([peaks[idx], peaks[idx]], [ymin, ymax], 'r-', lw=1.5)
+
                 # Settings
                 ax.grid(axis='both', color='0.95', zorder=-1)
                 ax.set_xlim(idx_start, idx_end)
@@ -802,53 +821,51 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
                     width=1.5, labelsize=12)
                 ax.set_ylabel('normalized intensity', fontsize=16)
             ax.set_xlabel('dispersion axis [px]', fontsize=16)
+            ax.set_title(title, fontsize=16)
             fig.align_ylabels()
-            fig.suptitle(title[0], fontsize=16)
             fig.tight_layout()
 
-            if save: plt.savefig(fig_path[0], dpi=100)
+            # Save
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-            if show: plt.show()
-            
             plt.close()
 
-            if n_bin // 10 >= 10:
-                idx_plot = np.linspace(0, n_bin - 1, 11).astype(int)
-
-            else:
-                idx_plot = np.arange(0, n_bin, 10)
-                if idx_plot[-1] != n_bin - 1:
-                    idx_plot = np.hstack([idx_plot, n_bin - 1])
-
+            # Distortion fitting plot
             z_fit = bispl(idx_col, loc_bin, grid=True).T
 
-            for i in idx_plot:
-                plotFitting(
-                    x=refined_peaks_arr[i], y=peaks - refined_peaks_arr[i], 
-                    residual=residual[i], mask=master_mask[i], x_fit=idx_col, 
-                    y_fit=z_fit[i] - idx_col, threshold_lower=threshold_lower, 
-                    threshold_upper=threshold_upper, xlabel='dispersion axis [px]', 
-                    ylabel='shift [px]', title=f'distortion at bin {loc_bin[i]}', 
-                    show=show, save=save, path=path, use_relative=False)
+            fig_path = _validatePath(path, 'distortion fitting', '.pdf')
+            with PdfPages(fig_path, keep_empty=False) as pdf:
 
-            residual[master_mask] = np.nan
-            cmap = plt.cm.get_cmap('Greys_r').copy(); cmap.set_bad('red', 1.)
-            extent = (0.5, residual.shape[1] + 0.5, 0.5, residual.shape[0] + 0.5)
+                for i in range(n_bin):
 
-            fig = plt.figure(figsize=(6, 6), dpi=100)
-            ax = fig.add_subplot(1, 1, 1)
-            _plot2d(
-                ax, residual, cmap=cmap, contrast=0.25, extent=extent, cbar=True, 
-                xlabel='peak number', ylabel='bin number', cblabel='pixel')
-            # Settings
-            fig.suptitle(title[1], fontsize=16)
-            fig.tight_layout()
+                    fig, ax = plt.subplots(
+                        2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
+                    fig.subplots_adjust(hspace=0)
 
-            if save: plt.savefig(fig_path[1], dpi=100)
+                    _plotFitting(
+                        ax=ax, x=refined_peaks_arr[i], 
+                        y=(peaks - refined_peaks_arr[i]), residual=residual[i], 
+                        mask=master_mask[i], x_fit=idx_col, y_fit=(z_fit[i] - idx_col), 
+                        threshold_lower=threshold_lower, 
+                        threshold_upper=threshold_upper, xlabel='dispersion axis [px]', 
+                        ylabel='shift [px]', use_relative=False)
 
-            if show: plt.show()
+                    ax[0].set_title(f'distortion at bin {loc_bin[i]}', fontsize=16)
+                    fig.align_ylabels()
+                    fig.tight_layout()
 
-            plt.close()
+                    pdf.savefig(fig, dpi=100)
+
+                    plt.close()
+
+        # Distortion residual image
+        residual[master_mask] = np.nan
+        cmap = plt.cm.get_cmap('Greys_r').copy(); cmap.set_bad('red', 1.)
+        plot2d(
+            residual, cmap=cmap, xlabel='peak number', ylabel='bin number', 
+            cblabel='pixel', title='distortion residual', show=False, save=plot, 
+            path=path)
 
     V = np.tile(idx_row, (n_col, 1)).T
 
@@ -963,8 +980,8 @@ def transform(ccd, X, Y, flux=True):
 # todo: doc
 def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=None, 
           n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, grow=False, 
-          use_mask=False, title='trace', show=conf.show, save=conf.save, 
-          path=conf.path):
+          use_mask=False, title='trace', show=conf.fig_show, save=conf.fig_save, 
+          path=conf.fig_path):
     """Trace on the 2-dimensional spectrum.
     
     First the spatial profiles are binned by taking median along the dispersion axis. 
@@ -1050,15 +1067,9 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
 
     idx_row, idx_col = np.arange(n_row), np.arange(n_col)
     
-    _validateInteger(n_med, 'n_med', (3, None), (True, None))
-    
     # Split into bins along dispersion axis
-    bin_edges = np.arange(0, n_col, n_med)
-    if bin_edges[-1] < (n_col - 1):
-        bin_edges = np.hstack([bin_edges, (n_col - 1)])
-    bin_edges = np.vstack([bin_edges[:-1], bin_edges[1:]]).T
-    n_bin = bin_edges.shape[0]
-    loc_bin = (bin_edges.sum(axis=1) - 1) / 2
+    _validateInteger(n_med, 'n_med', (3, None), (True, None))
+    bin_edges, loc_bin, n_bin = _validateBins(n_med, n_col, isWidth=True)
     
     # If `None`, the reference bin will be the middle bin when the total number is odd 
     # while the first bin of the second half when the total number is even.
@@ -1101,21 +1112,21 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
     # Gaussian fitting
     try:
         center_ref = _center1D_Gaussian(x_ref[~m_ref], y_ref[~m_ref], initial_guess, 0)
-        
+    
     except (RuntimeError, TypeError, OptimizeWarning): # raise exception here
         raise RuntimeError('No trace found in the given interval.')
     
     _validateString(method, 'method', ['center', 'trace'])
-
+    
     if method == 'center':
-
+    
         fitted_trace = np.full(n_col, center_ref)
-        
+    
     else:
         
         refined_trace = np.full(n_bin, np.nan)
         refined_trace[reference_bin] = center_ref
-        
+
         for i in range(reference_bin + 1, n_bin):
 
             # Bad pixels (NaNs or infs) in the original frame (if any) may lead to 
@@ -1124,7 +1135,7 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
             count_bin = np.nanmedian(
                 data_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
             mask_bin = np.all(mask_arr[:, bin_edges[i][0]:bin_edges[i][1]], axis=1)
-            
+
             # Peak range
             idx_ref = np.where(~np.isnan(refined_trace))[0].max()
             idx_min_bin = int(refined_trace[idx_ref] - 0.5 * fwhm)
@@ -1195,17 +1206,18 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
             use_relative=False)
 
         fitted_trace = spl(idx_col)
-        
+    
+    # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'trace':
-        title = f'{title} trace'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
-        
+
+        _validateString(title, 'title')
+        if title != 'trace':
+            title = f'{title} trace'
+
+        # Trace fitting plot
         if method == 'trace':
             plotFitting(
                 x=loc_bin, y=refined_trace, residual=residual, mask=master_mask, 
@@ -1214,41 +1226,50 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
                 ylabel='spatial axis [px]', title=title, show=show, save=save, 
                 path=path, use_relative=False)
 
-        extent = (0.5, data_arr.shape[1] + 0.5, 0.5, data_arr.shape[0] + 0.5)
+        # Trace image
+        if slit_along == 'col':
+            height_ratios = (1 / 4.5, n_col / n_row)
+        else:
+            height_ratios = (1 / 4.5, n_row / n_col)
+        fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=height_ratios, dpi=100)
 
-        fig = plt.figure(figsize=(6, 6), dpi=100)
-        gs = gridspec.GridSpec(3, 1)
-        ax = fig.add_subplot(gs[0]), fig.add_subplot(gs[1:])
         # Subplot 1
         ax[0].step(idx_row, count_ref, 'k-', lw=1.5, where='mid')
-        ax[0].axvline(x=center_ref, color='r', ls='--', lw=1.5)
-        if method == 'trace':
-            ax[0].axvline(x=idx_min_ref, color='b', ls='--', lw=1.5)
-            ax[0].axvline(x=idx_max_ref, color='b', ls='--', lw=1.5)
+        ax[0].axvline(x=center_ref, color='r', ls='-', lw=1.5)
+
         # Settings
         ax[0].grid(axis='both', color='0.95', zorder=-1)
         # ax[0].set_yscale('log')
-        ax[0].set_xlim(center_ref - 10 * fwhm, center_ref + 10 * fwhm)
         ax[0].tick_params(
             which='major', direction='in', top=True, right=True, length=5, width=1.5, 
             labelsize=12)
-        ax[0].set_xlabel('spatial axis [px]', fontsize=16)
         ax[0].set_ylabel('pixel value', fontsize=16)
+        ax[0].set_title(title, fontsize=16)
+
         # Subplot 2
-        _plot2d(
-            ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, extent=extent, 
-            cbar=False)
+        if slit_along == 'col':
+            _plot2d(
+                ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
+                xlabel='row', ylabel='column', aspect='auto')
+        else:
+            _plot2d(
+                ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, cbar=False, 
+                aspect='auto')
         (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
-        ax[1].plot(idx_col + 1, fitted_trace + 1, 'r-', lw=1.5)
+        ax[1].plot(fitted_trace, idx_col, 'r-', lw=1.5)
+
         # Settings
         ax[1].set_xlim(xmin, xmax)
         ax[1].set_ylim(ymin, ymax)
-        fig.suptitle(title, fontsize=16)
+        fig.set_figheight(fig.get_figwidth() * np.sum(height_ratios))
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 
@@ -1267,8 +1288,8 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
 
 def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1, 
                n_iter=5, sigma_lower=None, sigma_upper=None, grow=False, 
-               use_mask=False, title='background', show=conf.show, save=conf.save, 
-               path=conf.path):
+               use_mask=False, title='background', show=conf.fig_show, 
+               save=conf.fig_save, path=conf.fig_path):
     """Model background.
     
     Sky background of the input frame is modeled col by col (or row by row, depending 
@@ -1381,65 +1402,95 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
         bkg_arr[:, i] = p(idx_row)
         mask_arr[mask_bkg, i][master_mask] = True
-        std_arr[:, i] = residual.std(ddof=1)
+        std_arr[:, i] = residual.std()
 
+    # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'background':
-        title = f'{title} background'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
-        extent = (0.5, nccd.shape[1] + 0.5, 0.5, nccd.shape[0] + 0.5)
+        _validateString(title, 'title')
+        if title != 'background':
+            title = f'{title} background'
+        
+        # Background image
+        if slit_along == 'col':
+            height_ratios = (1 / 4.5, n_col / n_row)
+        else:
+            height_ratios = (1 / 4.5, n_row / n_col)
+        fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=height_ratios, dpi=100)
 
-        fig = plt.figure(figsize=(6, 6), dpi=100)
-        gs = gridspec.GridSpec(3, 1)
-        ax = fig.add_subplot(gs[0]), fig.add_subplot(gs[1:])
         # Subplot 1
         ax[0].step(idx_row, np.nanmedian(data_arr, axis=1), 'k-', lw=1.5, where='mid')
         ax[0].axvline(x=idx_lbkg_min.mean(), color='y', ls='--', lw=1.5)
         ax[0].axvline(x=idx_lbkg_max.mean(), color='y', ls='--', lw=1.5)
         ax[0].axvline(x=idx_rbkg_min.mean(), color='b', ls='--', lw=1.5)
         ax[0].axvline(x=idx_rbkg_max.mean(), color='b', ls='--', lw=1.5)
+
         # Settings
         ax[0].grid(axis='both', color='0.95', zorder=-1)
-        ax[0].set_xlim(idx_row[0], idx_row[-1])
         ax[0].tick_params(
             which='major', direction='in', top=True, right=True, length=5, width=1.5, 
             labelsize=12)
-        ax[0].set_xlabel('spatial axis [px]', fontsize=16)
         ax[0].set_ylabel('pixel value', fontsize=16)
         ax[0].set_title(title, fontsize=16)
+
         # Subplot 2
-        _plot2d(
-            ax=ax[1], ccd=nccd.data, cmap='Greys_r', contrast=0.25, extent=extent, 
-            cbar=False)
-        (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
         if slit_along == 'col':
-            ax[1].plot(idx_col + 1, trace1d + 1, 'r--', lw=1.5)
-            ax[1].plot(idx_col + 1, idx_lbkg_min + 1, 'y--', lw=1.5)
-            ax[1].plot(idx_col + 1, idx_lbkg_max + 1, 'y--', lw=1.5)
-            ax[1].plot(idx_col + 1, idx_rbkg_min + 1, 'b--', lw=1.5)
-            ax[1].plot(idx_col + 1, idx_rbkg_max + 1, 'b--', lw=1.5)
+            _plot2d(
+                ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
+                xlabel='row', ylabel='column', aspect='auto')
         else:
-            ax[1].plot(trace1d + 1, idx_row + 1, 'r--', lw=1.5)
-            ax[1].plot(idx_lbkg_min + 1, idx_row + 1, 'y--', lw=1.5)
-            ax[1].plot(idx_lbkg_max + 1, idx_row + 1, 'y--', lw=1.5)
-            ax[1].plot(idx_rbkg_min + 1, idx_row + 1, 'b--', lw=1.5)
-            ax[1].plot(idx_rbkg_max + 1, idx_row + 1, 'b--', lw=1.5)
+            _plot2d(
+                ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, cbar=False, 
+                aspect='auto')
+        (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
+        ax[1].plot(idx_lbkg_min, idx_col, 'y--', lw=1.5)
+        ax[1].plot(idx_lbkg_max, idx_col, 'y--', lw=1.5)
+        ax[1].plot(idx_rbkg_min, idx_col, 'b--', lw=1.5)
+        ax[1].plot(idx_rbkg_max, idx_col, 'b--', lw=1.5)
+
         # Settings
         ax[1].set_xlim(xmin, xmax)
         ax[1].set_ylim(ymin, ymax)
+        fig.set_figheight(fig.get_figwidth() * np.sum(height_ratios))
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
+
+    # Background fitting plot
+    if save:
+
+        fig_path = _validatePath(path, f'{title} fitting', '.pdf')
+        with PdfPages(fig_path, keep_empty=False) as pdf:
+
+            for i in idx_col[::10]:
+
+                fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
+                fig.subplots_adjust(hspace=0)
+
+                _plotFitting(
+                    ax=ax, x=idx_row, y=data_arr[:, i], 
+                    residual=(data_arr[:, i] - bkg_arr[:, i]), mask=mask_arr[:, i], 
+                    x_fit=idx_row, y_fit=bkg_arr[:, i], threshold_lower=None, 
+                    threshold_upper=None, xlabel='spatial axis [px]', 
+                    ylabel='pixel value', use_relative=False)
+
+                ax[0].set_title(f'background at column {i}', fontsize=16)
+                fig.align_ylabels()
+                fig.tight_layout()
+
+                pdf.savefig(fig, dpi=100)
+
+                plt.close()
 
     # Background frame
     if slit_along == 'col':
@@ -1474,8 +1525,8 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
 
 def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper=1, 
-            spectral_axis=None, title='aperture', show=conf.show, save=conf.save, 
-            path=conf.path):
+            spectral_axis=None, title='aperture', show=conf.fig_show, 
+            save=conf.fig_save, path=conf.fig_path):
     """Extract 1-dimensional spectra.
     
     Parameters
@@ -1625,37 +1676,40 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
 
         uncertainty_aper = np.sqrt(uncertainty_aper) # Standard deviation
 
+    # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'aperture':
-        title = f'{title} aperture'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
-        extent = (0.5, nccd.shape[1] + 0.5, 0.5, nccd.shape[0] + 0.5)
+        _validateString(title, 'title')
+        if title != 'aperture':
+            title = f'{title} aperture'
 
-        fig = plt.figure(dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
-        _plot2d(ax=ax, ccd=nccd.data, cmap='Greys_r', contrast=0.25, extent=extent)
+        fig, ax = plt.subplots(1, 1, dpi=100)
+
+        _plot2d(ax=ax, ccd=data_arr, cmap='Greys_r', contrast=0.25, aspect='auto')
         (xmin, xmax), (ymin, ymax) = ax.get_xlim(), ax.get_ylim()
         if slit_along == 'col':
             for aper_edge in aper_edges:
-                ax.plot(idx_col + 1, aper_edge + 1, 'r--', lw=1.5)
+                ax.plot(idx_col, aper_edge, 'r--', lw=1.5)
         else:
             for aper_edge in aper_edges:
-                ax.plot(aper_edge + 1, idx_row + 1, 'r--', lw=1.5)
+                ax.plot(aper_edge, idx_row, 'r--', lw=1.5)
+
         # Settings
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
         ax.set_title(title, fontsize=16)
+        fig.set_figheight(n_row / n_col * fig.get_figwidth())
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 

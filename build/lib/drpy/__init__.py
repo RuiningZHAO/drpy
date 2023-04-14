@@ -9,7 +9,7 @@ from astropy import config as _config
 
 __all__ = ['__version__', 'conf']
 
-__version__ = '0.0.1.6'
+__version__ = '0.0.1.7'
 
 
 class Conf(_config.ConfigNamespace):
@@ -24,16 +24,19 @@ class Conf(_config.ConfigNamespace):
 
     unit_flux = _config.ConfigItem(
         'count', 'Default unit for `~specutils.Spectrum1D` objects.')
-
+    
+    # Data type
     dtype_ccddata = _config.ConfigItem(
         'float32', 'Default dtype for `~astropy.nddata.CCDData` objects.')
 
     # Plot
-    show = _config.ConfigItem(False, 'Whether to show plots.')
+    fig_width = _config.ConfigItem(6, 'Width of figure.')
+    
+    fig_show = _config.ConfigItem(False, 'Whether to show plots.')
 
-    save = _config.ConfigItem(False, 'Whether to save plots.')
+    fig_save = _config.ConfigItem(False, 'Whether to save plots.')
 
-    path = _config.ConfigItem(os.getcwd(), 'Where to save plots.')
+    fig_path = _config.ConfigItem(os.getcwd(), 'Where to save plots.')
 
 
 conf = Conf()

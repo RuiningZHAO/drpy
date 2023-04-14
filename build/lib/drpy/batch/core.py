@@ -9,13 +9,10 @@ from astropy.time import Time
 from astropy.nddata import CCDData
 # ccdproc
 import ccdproc
-from ccdproc import (create_deviation, 
-                     cosmicray_lacosmic, 
-                     cosmicray_median)
 # drpy
 from drpy import conf
 from drpy.utils import imstatistics
-from drpy.validate import _validateBool, _validateString
+from drpy.validate import _validateBool
 
 # Configurations
 unit_ccddata = u.Unit(conf.unit_ccddata)
@@ -461,7 +458,8 @@ class CCDDataList:
                 nccd.mask = None
 
             # Of dtype float32
-            ccd_cosmicray_removed = cosmicray_lacosmic(ccd=nccd, *args, **kwargs)
+            ccd_cosmicray_removed = ccdproc.cosmicray_lacosmic(
+                ccd=nccd, *args, **kwargs)
 
             for key, value in keywords_dict.items():
                 ccd_cosmicray_removed.header[key] = value
@@ -499,7 +497,7 @@ class CCDDataList:
 
         for ccd in self._ccddatalist:
 
-            ccd_cosmicray_removed = cosmicray_median(ccd=ccd, *args, **kwargs)
+            ccd_cosmicray_removed = ccdproc.cosmicray_median(ccd=ccd, *args, **kwargs)
 
             for key, value in keywords_dict.items():
 

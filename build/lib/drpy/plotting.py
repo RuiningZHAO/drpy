@@ -15,6 +15,7 @@ from .validate import (_validateBool, _validatePath, _validateRange, _validateSt
                        _validateSpectrum)
 
 # Set plot parameters
+plt.rcParams['figure.figsize'] = [conf.fig_width, conf.fig_width]
 plt.rcParams['axes.linewidth'] = 1.5
 plt.rcParams['mathtext.fontset'] = 'stix'
 plt.rcParams['font.family'] = 'STIXGeneral'
@@ -22,10 +23,75 @@ plt.rcParams['font.family'] = 'STIXGeneral'
 __all__ = ['plotFitting', 'plotSpectrum1D', 'plot2d']
 
 
-# todo: add _plotFitting?
+def _plotFitting(ax, x, y, residual, mask, y_fit, x_fit, threshold_lower, 
+                 threshold_upper, xlabel='x', ylabel='y', use_relative=False):
+    """Plot fitting."""
+
+    if (threshold_lower is None) & (threshold_upper is None):
+        ymin = None; ymax = None
+    elif threshold_lower is None:
+        ymax = 1.67 * threshold_upper; ymin = -ymax
+    elif threshold_upper is None:
+        ymin = 1.67 * threshold_lower; ymax = -ymin
+    else:
+        ymax = 1.67 * np.max(np.abs([threshold_lower, threshold_upper])); ymin = -ymax
+    
+    # Data
+    ax[0].plot(x[mask], y[mask], '+', c='lightgrey', ms=8)
+    ax[0].plot(x[~mask], y[~mask], '+', c='black', ms=8)
+    # Fitted data
+    ax[0].plot(x_fit, y_fit, '-', c='red', lw=1.5)
+    
+    # Settings
+    ax[0].grid(True, ls='--')
+    # ticks
+    ax[0].tick_params(
+        which='major', direction='in', top=True, right=True, length=5, width=1.5, 
+        labelsize=12)
+    ax[0].minorticks_off()
+    # lim
+    ax[0].set_xlim(x_fit[0], x_fit[-1])
+    if ymin is not None:
+        y_fit_min = np.nanmin(y_fit)
+        y_fit_max = np.nanmax(y_fit)
+        if use_relative:
+            ax[0].set_ylim((y_fit_min + y_fit_max * ymin), (y_fit_max * (1 + ymax)))
+        else:
+            ax[0].set_ylim((y_fit_min + ymin), (y_fit_max + ymax))
+    # labels
+    ax[0].set_ylabel(ylabel, fontsize=16)
+
+    # Residual
+    ax[1].plot(x[mask], residual[mask], '+', c='lightgrey', ms=8)
+    ax[1].plot(x[~mask], residual[~mask], '+', c='black', ms=8)
+    ax[1].axhline(y=0, ls='-', c='red', lw=1.5)
+    if threshold_lower is not None:
+        ax[1].axhline(y=threshold_lower, ls='--', c='red', lw=1.5)
+    if threshold_upper is not None:
+        ax[1].axhline(y=threshold_upper, ls='--', c='red', lw=1.5)
+    
+    # Settings
+    ax[1].grid(True, ls='--')
+    # ticks
+    ax[1].tick_params(
+        which='major', direction='in', top=True, right=True, length=5, width=1.5, 
+        labelsize=12)
+    ax[1].minorticks_off()
+    # lim
+    ax[1].set_ylim(ymin, ymax)
+    # label
+    ax[1].set_xlabel(xlabel, fontsize=16)
+    if use_relative:
+        label_residual = 'rel. residual'
+    else:
+        label_residual = 'residual'
+    ax[1].set_ylabel(label_residual, fontsize=16)
+
+    
 def plotFitting(x, y, residual, mask, y_fit, x_fit=None, threshold_lower=None, 
                 threshold_upper=None, xlabel='x', ylabel='y', title='fitting', 
-                show=conf.show, save=conf.save, path=conf.path, use_relative=False):
+                show=conf.fig_show, save=conf.fig_save, path=conf.fig_path, 
+                use_relative=False):
     """Plot fitting.
 
     Parameters
@@ -41,14 +107,13 @@ def plotFitting(x, y, residual, mask, y_fit, x_fit=None, threshold_lower=None,
     """
 
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'fitting':
-        title = f'{title} fitting'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
+
+        _validateString(title, 'title')
+        if title != 'fitting':
+            title = f'{title} fitting'
         
         if x_fit is None:
             x_fit = deepcopy(x)
@@ -67,68 +132,23 @@ def plotFitting(x, y, residual, mask, y_fit, x_fit=None, threshold_lower=None,
                 _validateRange(
                     threshold_upper, 'threshold_upper', (0, None), (True, None))
 
-        _validateString(xlabel, 'xlabel')
-        _validateString(ylabel, 'ylabel')
-
         _validateBool(use_relative, 'use_relative')
-        if use_relative:
-            label_residual = 'rel. residual'
-        else:
-            label_residual = 'residual'
 
-        fig = plt.figure(figsize=(6, 6), dpi=100)
-        gs = gridspec.GridSpec(3, 1)
-        ax = fig.add_subplot(gs[:2]), fig.add_subplot(gs[2])
-
-        # Data
-        ax[0].plot(x[mask], y[mask], '+', c='lightgrey', ms=8)
-        ax[0].plot(x[~mask], y[~mask], '+', c='black', ms=8)
-        # Fitted data
-        ax[0].plot(x_fit, y_fit, '-', c='red', lw=1.5)
-        # Settings
-        ax[0].grid(True, ls='--')
-        ax[0].set_xlim(x_fit[0], x_fit[-1])
-        # ax[0].set_ylim(y_fit.min(), y_fit.max())
-        ax[0].tick_params(
-            which='major', direction='in', top=True, right=True, length=5, width=1.5, 
-            labelsize=12)
-        ax[0].minorticks_off()
-        ax[0].set_xticklabels([])
-        ax[0].set_ylabel(ylabel, fontsize=16)
-
-        # Residual
-        ax[1].plot(x[mask], residual[mask], '+', c='lightgrey', ms=8)
-        ax[1].plot(x[~mask], residual[~mask], '+', c='black', ms=8)
-        # Settings
-        ax[1].grid(True, ls='--')
-        ax[1].axhline(y=0, ls='-', c='red', lw=1.5)
-        if threshold_lower is not None:
-            ax[1].axhline(y=threshold_lower, ls='--', c='red', lw=1.5)
-        if threshold_upper is not None:
-            ax[1].axhline(y=threshold_upper, ls='--', c='red', lw=1.5)
-        ax[1].set_xlim(x_fit[0], x_fit[-1])
-        if threshold_lower is not None:
-            ymin = 1.67 * threshold_lower
-        else:
-            ymin = None
-        if threshold_upper is not None:
-            ymax = 1.67 * threshold_upper
-        else:
-            ymax = None
-        ax[1].set_ylim(ymin, ymax)
-        ax[1].tick_params(
-            which='major', direction='in', top=True, right=True, length=5, width=1.5, 
-            labelsize=12)
-        ax[1].minorticks_off()
-        ax[1].set_xlabel(xlabel, fontsize=16)
-        ax[1].set_ylabel(label_residual, fontsize=16)
+        fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
+        fig.subplots_adjust(hspace=0)
+        _plotFitting(
+            ax, x, y, residual, mask, y_fit, x_fit, threshold_lower, threshold_upper, 
+            xlabel, ylabel, use_relative)
+        ax[0].set_title(title, fontsize=16)
         fig.align_ylabels()
-        fig.suptitle(title, fontsize=16)
         fig.tight_layout()
+        
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if save: plt.savefig(fig_path, dpi=100)
-
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 
@@ -165,8 +185,8 @@ def _plotSpectrum1D(ax, spectral_axis, flux, uncertainty=None, xlabel='spectral 
     ax.set_ylabel(ylabel, fontsize=16)
     
 # todo: label masked pixels, add legend?
-def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save, 
-                   path=conf.path):
+def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.fig_show, 
+                   save=conf.fig_save, path=conf.fig_path):
     """Plot 1-dimensional spectrum of type `~specutils.Spectrum1D`.
     
     Parameters
@@ -185,14 +205,13 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
     """
 
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'spectrum':
-        title = f'{title} spectrum'
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
+
+        _validateString(title, 'title')
+        if title != 'spectrum':
+            title = f'{title} spectrum'
 
         new_spectrum1d, spectral_axis, flux, uncertainty, mask = _validateSpectrum(
             spectrum1d, 'spectrum1d', True, True)
@@ -208,16 +227,20 @@ def plotSpectrum1D(spectrum1d, title='spectrum', show=conf.show, save=conf.save,
         xlabel = f'spectral axis [{unit_spectral_axis}]'
         ylabel = f'flux [{unit_flux}]'
 
-        fig = plt.figure(figsize=(6, 4), dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
-        _plotSpectrum1D(ax, spectral_axis, flux, uncertainty, xlabel=xlabel, ylabel=ylabel)
+        fig, ax = plt.subplots(1, 1, dpi=100)
+        _plotSpectrum1D(
+            ax, spectral_axis, flux, uncertainty, xlabel=xlabel, ylabel=ylabel)
         # ax.legend(fontsize=16)
         ax.set_title(title, fontsize=16)
+        fig.set_figheight(0.7 * fig.get_figwidth())
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
 
@@ -252,7 +275,9 @@ def _plot2d(ax, ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column',
 
     # Colorbar
     if cbar:
-        cb = plt.colorbar(im, ax=ax, use_gridspec=True)
+        cb = plt.colorbar(
+            im, ax=ax, fraction=(0.046 * ccd.shape[0] / ccd.shape[1]), pad=0.04, 
+            use_gridspec=True)
         # Settings
         cb.ax.tick_params(
             which='major', direction='in', right=True, color='w', length=5, width=1.5, 
@@ -260,8 +285,9 @@ def _plot2d(ax, ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column',
         cb.ax.set_ylabel(cblabel, fontsize=16)
 
 
-def plot2d(ccd, cmap='Greys_r', contrast=0.25, extent=None, cbar=True, title='image', 
-           show=conf.show, save=conf.save, path=conf.path, **kwargs):
+def plot2d(ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column', 
+           ylabel='row', cblabel='pixel value', title='image', show=conf.fig_show, 
+           save=conf.fig_save, path=conf.fig_path, **kwargs):
     """Plot image.
 
     Parameters
@@ -277,25 +303,25 @@ def plot2d(ccd, cmap='Greys_r', contrast=0.25, extent=None, cbar=True, title='im
     """
 
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
-        fig = plt.figure(figsize=(6, 6), dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
-        if extent is None:
-            extent = (0.5, ccd.shape[1] + 0.5, 0.5, ccd.shape[0] + 0.5)
+        _validateString(title, 'title')
+
+        fig, ax = plt.subplots(1, 1, dpi=100)
         _plot2d(
-            ax=ax, ccd=ccd, cmap=cmap, contrast=contrast, cbar=cbar, extent=extent, 
-            **kwargs)
-        fig.suptitle(title, fontsize=16)
+            ax=ax, ccd=ccd, cmap=cmap, contrast=contrast, cbar=cbar, xlabel=xlabel, 
+            ylabel=ylabel, cblabel=cblabel, **kwargs)
+        ax.set_title(title, fontsize=16)
+        fig.set_figheight(ccd.shape[0] / ccd.shape[1] * fig.get_figwidth())
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path, dpi=100)
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()

@@ -372,14 +372,17 @@ def _validateSpectrum(spectrum, name, use_uncertainty, use_mask):
     return new_spectrum, spectral_axis, flux, uncertainty, mask
 
 
-def _validateBins(bins, length):
+def _validateBins(bins, length, isWidth=False):
     """Validate bins and derive bin edges."""
 
     if np.ndim(bins) == 0:
         # Validate
         _validateInteger(bins, 'bins', (1, length), (True, True))
         # Generate bin edges
-        bin_edges = np.linspace(0, length, bins + 1).astype(int)
+        if isWidth:
+            bin_edges = np.hstack([np.arange(0, length, bins), length])
+        else:
+            bin_edges = np.linspace(0, length, bins + 1).astype(int)
 
     elif np.ndim(bins) == 1:
         # Generate bin edges
@@ -394,8 +397,10 @@ def _validateBins(bins, length):
         raise ValueError('``bins`` must be 1-dimensional, when an array')
 
     bin_edges = np.vstack([bin_edges[:-1], bin_edges[1:]]).T
+    n_bin = bin_edges.shape[0]
+    loc_bin = (bin_edges.sum(axis=1) - 1) / 2
 
-    return bin_edges
+    return bin_edges, loc_bin, n_bin
 
 
 def _validateAperture(aperture, name):
@@ -419,31 +424,24 @@ def _validateAperture(aperture, name):
 
     return aperture
 
-
-def _validatePath(save, path, title):
+# todo: slugify
+def _validatePath(path, title, extension='.png'):
     """Validate path arguments."""
 
-    _validateBool(save, 'save')
+    if path is None:
+        path = os.getcwd()
 
-    if save:
+    elif not os.path.exists(path):
+        raise OSError(f'Path {path} does not exist.')
 
-        if path is None:
-            path = os.getcwd()
-
-        else:
-            _validateString(path, 'path')
-
-        if isinstance(title, str):
-            fig_name = f'{title}.png'.replace(' ', '_')
-            fig_path = os.path.join(path, fig_name)
-        
-        else:
-            fig_path = list()
-            for t in title:
-                fig_name = f'{t}.png'.replace(' ', '_')
-                fig_path.append(os.path.join(path, fig_name))
+    if isinstance(title, str):
+        fig_name = f'{title}{extension}'.replace(' ', '_')
+        fig_path = os.path.join(path, fig_name)
 
     else:
-        fig_path = None
+        fig_path = list()
+        for t in title:
+            fig_name = f'{t}{extension}'.replace(' ', '_')
+            fig_path.append(os.path.join(path, fig_name))
 
     return fig_path

@@ -6,9 +6,10 @@ import numpy as np
 from scipy.optimize import curve_fit, OptimizeWarning
 # matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 # AstroPy
 from astropy.nddata import Cutout2D
-from astropy.stats import gaussian_sigma_to_fwhm
+from astropy.stats import gaussian_sigma_to_fwhm, sigma_clip
 # photutils
 from photutils import CircularAperture, RectangularAperture
 from photutils.background import Background2D
@@ -21,11 +22,18 @@ from drpy.plotting import _plot2d
 from drpy.validate import (_validateString, _validateBool, _validateRange, 
                            _validateInteger, _validateCCD, _validatePath)
 
+# Set plot parameters
+plt.rcParams['figure.figsize'] = [conf.fig_width, conf.fig_width]
+plt.rcParams['axes.linewidth'] = 1.5
+plt.rcParams['mathtext.fontset'] = 'stix'
+plt.rcParams['font.family'] = 'STIXGeneral'
+
 __all__ = ['getFWHM']
 
-# todo: deal with NaNs in Gaussian fitting.
-def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, use_mask=False, 
-            title='FWHM', show=conf.show, save=conf.save, path=conf.path, **kwargs):
+
+def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, n_iter=5, 
+            sigma_lower=None, sigma_upper=None, use_mask=False, title='fwhm', 
+            show=conf.fig_show, save=conf.fig_save, path=conf.fig_path, **kwargs):
     """Estimate mean FWHM of the sources in the input image.
 
     The background of the input image is first modeled by a 2-dimensional background 
@@ -57,6 +65,18 @@ def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, use_mask=Fa
     n_peak : int
         Number of peaks. When number of peaks exceeds ``n_peak``, the peaks with the 
         highest peak intensities are used in determining FWHM.
+
+    n_iter : int, optional
+        Number of sigma slipping iterations. Must be >= `0`.
+        Default is `5`.
+
+    sigma_lower : scalar or `None`, optional
+        Number of standard deviations to use as the lower bound for the clipping limit. 
+        If `None` (default), `3` is used.
+
+    sigma_upper : scalar or `None`, optional
+        Number of standard deviations to use as the upper bound for the clipping limit. 
+        If `None` (default), `3` is used.
 
     use_mask : bool, optional
         If `True` and a mask array is attributed to ``ccd``, the masked pixels are 
@@ -162,7 +182,7 @@ def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, use_mask=Fa
 
                 if (a > 0) & (xy_min < x0 < xy_max) & (xy_min < y0 < xy_max):
                     position_arr[i] = x0 + size // 2, y0 + size // 2
-                    fwhm_arr[i] = sigma * gaussian_sigma_to_fwhm
+                    fwhm_arr[i] = np.abs(sigma) * gaussian_sigma_to_fwhm
                     cutout2d_arr[i] -= b
 
                 else:
@@ -172,84 +192,106 @@ def getFWHM(ccd, box_size, n_sigma, aper_radius, saturation, n_peak, use_mask=Fa
                 pass
 
     # Output
-    fwhm, fwhm_err = np.nanmean(fwhm_arr), np.nanstd(fwhm_arr, ddof=1)
+    fwhm_arr_masked, threshold_lower, threshold_upper = sigma_clip(
+        data=fwhm_arr, sigma_lower=sigma_lower, sigma_upper=sigma_upper, 
+        maxiters=n_iter, stdfunc='mad_std', masked=True, return_bounds=True)
+    fwhm, fwhm_err = fwhm_arr_masked.mean(), fwhm_arr_masked.std(ddof=1)
 
+    if fwhm_arr_masked.mask.sum() > 0:
+        warnings.warn(
+            'Fitting for some sources failed (may caused by cosmic rays).', 
+            RuntimeWarning
+        )
+
+    # Plot
     _validateBool(show, 'show')
-
-    _validateString(title, 'title')
-    if title != 'FWHM':
-        title = [f'{title} FWHM (source detection)', 
-                 f'{title} FWHM (Gaussian2D fitting)']
-    else:
-        title = [f'FWHM (source detection)', f'FWHM (Gaussian2D fitting)']
-
-    fig_path = _validatePath(save, path, title)
+    _validateBool(save, 'save')
 
     if show | save:
 
-        # Plot source detection
-        fig = plt.figure(dpi=100)
-        ax = fig.add_subplot(1, 1, 1)
+        _validateString(title, 'title')
+        if title != 'fwhm':
+            title = [f'{title} fwhm (source detection)', 
+                     f'{title} fwhm (cutoff)']
+        else:
+            title = [f'fwhm (source detection)', f'fwhm (cutoff)']
+
+        # Source detection plot
+        fig, ax = plt.subplots(1, 1, dpi=100)
+
         # Image
-        extent = (
-            0.5, data_arr_bkgsb.shape[1] + 0.5, 0.5, data_arr_bkgsb.shape[0] + 0.5
-        )
-        _plot2d(ax=ax, ccd=data_arr_bkgsb, cmap='Greys_r', extent=extent)
+        _plot2d(ax=ax, ccd=data_arr_bkgsb, cmap='Greys_r')
         (xmin, xmax), (ymin, ymax) = ax.get_xlim(), ax.get_ylim()
         # Mask
         ax.imshow(
-            mask_arr, cmap='Greys', alpha=0.3 * mask_arr.astype(int), origin='lower', 
-            extent=extent)
+            mask_arr, cmap='Greys', alpha=0.3 * mask_arr.astype(int), origin='lower')
         # Aperture
         apertures = RectangularAperture(
-            positions=np.transpose([x + 1, y + 1]), w=size, h=size, theta=0)
-        apertures.plot(ax, color='r', lw=1)
+            positions=np.transpose([x, y]), w=size, h=size, theta=0)
+        apertures[fwhm_arr_masked.mask].plot(ax, color='b', lw=1)
+        apertures[~fwhm_arr_masked.mask].plot(ax, color='r', lw=1)
+
         # Setting
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
+        ax.annotate(
+            'masked', xy=(0.75, 0.88), xycoords='axes fraction', fontsize=16, 
+            color='b')
+        ax.annotate(
+            'detected', xy=(0.75, 0.93), xycoords='axes fraction', fontsize=16, 
+            color='r')
         ax.set_title(title[0], fontsize=16)
-
-        if save: plt.savefig(fig_path[0], dpi=100)
-
-        if show: plt.show()
-
-        plt.close()
-
-        if (n_peak % 4) == 0:
-            nrow = n_peak // 4
-        else:
-            nrow = n_peak // 4 + 1
-
-        fig = plt.figure(figsize=(10, 2 * nrow), dpi=100)
-        extent = (0.5, size + 0.5, 0.5, size + 0.5)
-        for i in range(n_peak):
-            ax = fig.add_subplot(nrow, 4, i + 1)
-            # Image
-            _plot2d(
-                ax=ax, ccd=cutout2d_arr[i], cmap='Greys_r', extent=extent, cbar=False, 
-                xlabel=None, ylabel=None)
-            # Aperture
-            apertures = CircularAperture(
-                (position_arr[i][0] + 1, position_arr[i][1] + 1), r=(fwhm_arr[i] / 2))
-            apertures.plot(ax, color='r', lw=1)
-            # Centroid
-            ax.plot(position_arr[i][0] + 1, position_arr[i][1] + 1, 'r+')
-            # Settings
-            ax.tick_params(
-                which='major', direction='in', top=True, right=True, color='w', length=5, 
-                width=1, labelsize=12)
-            ax.annotate(
-                'FWHM$=' + f'{fwhm_arr[i]:.2f}' + '\\,$px', xy=(0.05, 0.85), 
-                xycoords='axes fraction', color='w', fontsize=12)
-        fig.supxlabel('column', fontsize=16)
-        fig.supylabel('row', fontsize=16)
-        fig.suptitle(title[1], fontsize=16)
+        fig.set_figheight(
+            (data_arr_bkgsb.shape[0] / data_arr_bkgsb.shape[1] * fig.get_figwidth()))
         fig.tight_layout()
 
-        if save: plt.savefig(fig_path[1], dpi=100)
+        if save:
+            fig_path = _validatePath(path, title[0])
+            plt.savefig(fig_path, dpi=100)
 
-        if show: plt.show()
+        if show:
+            plt.show()
 
         plt.close()
+
+    # Cutout
+    if save:
+
+        fig_path = _validatePath(path, title[1], '.pdf')
+        with PdfPages(fig_path, keep_empty=False) as pdf:
+
+            for i in range(n_peak):
+
+                if fwhm_arr_masked.mask[i]:
+                    color = 'b'
+                else:
+                    color = 'r'
+
+                fig, ax = plt.subplots(1, 1, figsize=(3.2, 3.2), dpi=100)
+
+                # Image
+                _plot2d(
+                    ax=ax, ccd=cutout2d_arr[i], cmap='Greys_r', cbar=False, 
+                    xlabel='column', ylabel='row')
+                # Aperture
+                apertures = CircularAperture(
+                    (position_arr[i][0], position_arr[i][1]), r=(fwhm_arr[i] / 2))
+                apertures.plot(ax, color=color, lw=1)
+                # Centroid
+                ax.plot(position_arr[i][0], position_arr[i][1], '+', color=color, ms=15)
+                
+                # Settings
+                ax.tick_params(
+                    which='major', direction='in', top=True, right=True, color='w', 
+                    length=5, width=1, labelsize=12)
+                ax.annotate(
+                    'FWHM$=' + f'{fwhm_arr[i]:.2f}' + '\\,$px', xy=(0.05, 0.85), 
+                    xycoords='axes fraction', color='w', fontsize=12)
+                ax.set_title(f'cutoff at ({x[i]:.0f}, {y[i]:.0f})', fontsize=16)
+                fig.tight_layout()
+
+                pdf.savefig(fig, dpi=100)
+
+                plt.close()
     
     return fwhm, fwhm_err
