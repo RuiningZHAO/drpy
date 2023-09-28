@@ -9,6 +9,8 @@ src/astro_drpy.egg-info/dependency_links.txt
 src/astro_drpy.egg-info/requires.txt
 src/astro_drpy.egg-info/top_level.txt
 src/drpy/__init__.py
+src/drpy/core.py
+src/drpy/decorate.py
 src/drpy/plotting.py
 src/drpy/utils.py
 src/drpy/validate.py
@@ -503,5 +505,8 @@ src/drpy/onedspec/lib/onedstds/spechayescal/pg1708602.dat
 src/drpy/onedspec/lib/onedstds/spechayescal/standards.men
 src/drpy/onedspec/lib/onedstds/spechayescal/wolf1346.dat
 src/drpy/twodspec/__init__.py
+src/drpy/twodspec/background.py
+src/drpy/twodspec/extract.py
 src/drpy/twodspec/longslit.py
+src/drpy/twodspec/trace.py
 src/drpy/twodspec/utils.py

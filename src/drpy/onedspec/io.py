@@ -6,7 +6,7 @@ import numpy as np
 # AstroPy
 from astropy.io import fits
 from astropy.time import Time
-from astropy.table import Table
+from astropy.table import QTable
 import astropy.units as u
 from astropy.nddata import StdDevUncertainty
 # specutils
@@ -119,31 +119,25 @@ def loadSpectrum1D(file_name, ext=1, **kwargs):
     with fits.open(file_name, **kwargs) as hdulist:
         hdu = hdulist[ext]
         header = hdu.header
-        table = Table.read(hdu)
+        qtable = QTable.read(hdu)
 
-    spectral_axis = table['spectral_axis'].value * table['spectral_axis'].unit
-
-    flux = table['flux'].value * table['flux'].unit
-
-    colnames = table.colnames
-
-    if 'uncertainty' in colnames:
-        uncertainty = StdDevUncertainty(table['uncertainty'].value)
+    if 'uncertainty' in qtable.colnames:
+        uncertainty = StdDevUncertainty(qtable['uncertainty'].value.T)
 
     else:
         uncertainty = None
-    
-    if 'mask' in colnames:
-        mask = table['mask'].value
+
+    if 'mask' in qtable.colnames:
+        mask = qtable['mask'].value.T
 
     else:
         mask = None
 
     meta = {'header': header}
-    
+
     spectrum1d = Spectrum1D(
-        spectral_axis=spectral_axis, flux=flux, uncertainty=uncertainty, mask=mask, 
-        meta=meta)
+        spectral_axis=qtable['spectral_axis'], flux=qtable['flux'].T, 
+        uncertainty=uncertainty, mask=mask, meta=meta)
 
     return spectrum1d
 

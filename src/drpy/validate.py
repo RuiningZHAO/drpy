@@ -184,7 +184,7 @@ def _validateCCDData(ccd, name):
         nccd = ccd.copy()
     # Do not have uncertainty frame. May have (or not have) mask frame.
     else:
-        nccd = CCDData(deepcopy(ccd), unit=unit_ccddata)
+        nccd = CCDData(ccd.copy(), unit=unit_ccddata)
 
     return nccd
 
@@ -298,13 +298,13 @@ def _validateCCDList(ccdlist, n_frame, n_dim):
     return nccdlist
 
 
-def _validateCCD(ccd, name, use_uncertainty, use_mask, transpose):
+def _validateCCD(ccd, name, use_uncertainty, use_mask, transpose, asWeight=False):
     """Validate a CCD image."""
     
     nccd = _validateCCDData(ccd, name)
 
     # Data
-    data_arr = deepcopy(nccd.data)
+    data_arr = nccd.data.copy()
     
     # Uncertainty
     if use_uncertainty:
@@ -312,11 +312,13 @@ def _validateCCD(ccd, name, use_uncertainty, use_mask, transpose):
             warnings.warn(
                 'The input uncertainty is unavailable. All set to zero.', 
                 RuntimeWarning)
-            uncertainty_arr = np.zeros_like(data_arr)
+            uncertainty_arr = (
+                np.zeros_like(data_arr) if not asWeight else np.ones_like(data_arr))
         else:
-            uncertainty_arr = deepcopy(nccd.uncertainty.array)
+            uncertainty_arr = nccd.uncertainty.array.copy()
     else:
-        uncertainty_arr = np.zeros_like(data_arr)
+        uncertainty_arr = (
+            np.zeros_like(data_arr) if not asWeight else np.ones_like(data_arr))
     
     # Mask
     if use_mask:
@@ -325,7 +327,7 @@ def _validateCCD(ccd, name, use_uncertainty, use_mask, transpose):
                 'The input mask is unavailable. All set unmasked.', RuntimeWarning)
             mask_arr = np.zeros_like(data_arr, dtype=bool)
         else:
-            mask_arr = deepcopy(nccd.mask)
+            mask_arr = nccd.mask.copy()
     else:
         mask_arr = np.zeros_like(data_arr, dtype=bool)
 
@@ -343,8 +345,8 @@ def _validateSpectrum(spectrum, name, use_uncertainty, use_mask):
     new_spectrum = _validateSpectrum1D(spectrum, name)
     
     # Data
-    spectral_axis = deepcopy(new_spectrum.spectral_axis.value)
-    flux = deepcopy(new_spectrum.flux.value)
+    spectral_axis = new_spectrum.spectral_axis.value.copy()
+    flux = new_spectrum.flux.value.copy()
     
     # Uncertainty
     if use_uncertainty:
@@ -354,7 +356,7 @@ def _validateSpectrum(spectrum, name, use_uncertainty, use_mask):
                 RuntimeWarning)
             uncertainty = np.zeros_like(flux)
         else:
-            uncertainty = deepcopy(new_spectrum.uncertainty.array)
+            uncertainty = new_spectrum.uncertainty.array.copy()
     else:
         uncertainty = np.zeros_like(flux)
     
@@ -365,7 +367,7 @@ def _validateSpectrum(spectrum, name, use_uncertainty, use_mask):
                 'The input mask is unavailable. All set unmasked.', RuntimeWarning)
             mask = np.zeros_like(flux, dtype=bool)
         else:
-            mask = deepcopy(new_spectrum.mask)
+            mask = new_spectrum.mask.copy()
     else:
         mask = np.zeros_like(flux, dtype=bool)
     

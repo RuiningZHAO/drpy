@@ -12,8 +12,10 @@ from matplotlib.backends.backend_pdf import PdfPages
 # AstroPy
 import astropy.units as u
 from astropy.time import Time
+from astropy.stats import sigma_clip
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_replace_nans
+from astropy.utils.exceptions import AstropyUserWarning
 # ccdproc
 from ccdproc import flat_correct
 # specutils
@@ -24,14 +26,17 @@ from drpy.batch import CCDDataList
 from drpy.onedspec import loadExtinctionCurve
 from drpy.onedspec.center import _center1D_Gaussian, _refinePeakBases, _refinePeaks
 from drpy.modeling import Poly1D, Spline1D, Spline2D, GaussianSmoothing2D
-from drpy.plotting import plotFitting, _plotFitting, plot2d, _plot2d, _plotSpectrum1D
+from drpy.plotting import plotFitting, _plotFitting, plot2d, _plot2d
 from drpy.validate import (_validateBool, _validateString, _validateRange, 
                            _validateInteger, _validate1DArray, _validateNDArray, 
                            _validateCCDData, _validateCCDList, _validateCCD, 
                            _validateSpectrum, _validateBins, _validateAperture, 
                            _validatePath)
+from drpy.decorate import ignoreWarning
 
 from .utils import invertCoordinateMap
+
+sigma_clip = ignoreWarning(sigma_clip, 'ignore', AstropyUserWarning)
 
 # Set plot parameters
 plt.rcParams['figure.figsize'] = [conf.fig_width, conf.fig_width]
@@ -40,12 +45,13 @@ plt.rcParams['mathtext.fontset'] = 'stix'
 plt.rcParams['font.family'] = 'STIXGeneral'
 
 __all__ = ['response', 'illumination', 'align', 'fitcoords', 'transform', 'trace', 
-           'background', 'extract', 'calibrate2d']
+           'background', 'profile', 'extract', 'calibrate2d']
 
 
-def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, 
-             grow=False, use_mask=False, plot=True, path=conf.fig_path):
-    """Determine response calibration.
+def response(ccd, slit_along, n_piece=3, coordinate=None, maxiters=5, sigma_lower=None, 
+             sigma_upper=None, grow=False, use_mask=False, plot=True, 
+             path=conf.fig_path):
+    """Model response.
 
     Parameters
     ----------
@@ -61,8 +67,15 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
         Number of spline pieces. Lengths are all equal. Must be positive.
         Default is `3`.
 
-    n_iter : int, optional
-        Number of sigma slipping iterations. Must be >= `0`.
+    coordinate : `~numpy.ndarray` or `None`, optional
+        One of the coordinate maps describing the curvature of the input frame. A 
+        one-to-one mapping is assumed for the other.
+        Default is `None`.
+
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
         Default is `5`.
 
     sigma_lower : scalar or `None`, optional
@@ -85,7 +98,8 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     Returns
     -------
     nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
-        Response calibration frame, of the same type as the input ``ccd``.
+        Modeled response, of the same type as the input ``ccd``. The mask attached (if 
+        any) is for the input frame rather than the modeled response.
     """
 
     _validateString(slit_along, 'slit_along', ['col', 'row'])
@@ -95,8 +109,14 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     if slit_along == 'col':
         nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, False)
 
+        if coordinate is not None:
+            coordinate = _validateNDArray(coordinate, 'coordinate', 2)
+
     else:
         nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, True)
+
+        if coordinate is not None:
+            coordinate = _validateNDArray(coordinate, 'coordinate', 2).T
 
     n_row, n_col = data_arr.shape
 
@@ -108,65 +128,58 @@ def response(ccd, slit_along, n_piece=3, n_iter=5, sigma_lower=None, sigma_upper
     # Bad pixels (NaNs or infs) in the original frame (if any) may lead to unmasked 
     # elements in ``y`` and may cause an error in the spline fitting below.
     y = np.nanmean(data_arr, axis=0)
-    mask_y = np.all(mask_arr, axis=0)
+    m_y = np.all(mask_arr, axis=0)
 
     # Fit cubic spline function (always float64)
     spl, residual, threshold_lower, threshold_upper, master_mask = Spline1D(
-        x=x, y=y, weight=None, mask=mask_y, order=3, n_piece=n_piece, n_iter=n_iter, 
+        x=x, y=y, m=m_y, order=3, n_piece=n_piece, maxiters=maxiters,  
         sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, use_relative=True)
-    
+
     # Control precision
     y_fit = spl(x).astype(ccd.dtype)
-    rms_y_fit = (y_fit * residual)[~master_mask].std(dtype=ccd.dtype)
 
     # Fitting plot
     plotFitting(
-        x=x, y=y, residual=residual, mask=master_mask, x_fit=x, y_fit=y_fit, 
+        x=x, y=y, m=master_mask, y_fit=y_fit, r=residual, 
         threshold_lower=threshold_lower, threshold_upper=threshold_upper, 
         xlabel='dispersion axis [px]', ylabel='pixel value', title='response', 
         show=False, save=plot, path=path, use_relative=True)
 
-    if slit_along == 'col':
-        rccd = CCDData(
-            data=(np.tile(y_fit, (n_row, 1)) * nccd.unit), 
-            uncertainty=StdDevUncertainty(np.full((n_row, n_col), rms_y_fit)), 
-            mask=np.tile(master_mask, (n_row, 1))
-        )
-
+    if coordinate is not None:
+        data_fit = spl(coordinate).astype(ccd.dtype)
     else:
-        rccd = CCDData(
-            data=(np.tile(y_fit, (n_row, 1)).T * nccd.unit), 
-            uncertainty=StdDevUncertainty(np.full((n_col, n_row), rms_y_fit)), 
-            mask=np.tile(master_mask, (n_row, 1)).T
-        )
+        data_fit = np.tile(y_fit, (n_row, 1))
 
-    # Response calibrated frame
-    nccd = flat_correct(ccd=nccd, flat=rccd, norm_value=1)
+    if slit_along == 'col':
+        nccd.data = data_fit.copy()
+        if ccd.mask is not None:
+            nccd.mask = np.tile(master_mask, (n_row, 1))
+    else:
+        nccd.data = data_fit.T
+        if ccd.mask is not None:
+            nccd.mask = np.tile(master_mask, (n_row, 1)).T
 
-    if ccd.uncertainty is None:
-        nccd.uncertainty = None
-
-    if ccd.mask is None:
-        nccd.mask = None
+    nccd.uncertainty = None
 
     # Output
     if isinstance(ccd, CCDData):
-        nccd.header['RESPONSE'] = '{} Response corrected.'.format(
+        nccd.header['RESPONSE'] = '{} Response.'.format(
             Time.now().to_value('iso', subfmt='date_hm'))
 
     elif np.ma.isMaskedArray(ccd):
         nccd = np.ma.array(nccd.data, mask=nccd.mask)
 
     else:
-        nccd = deepcopy(nccd.data)
+        nccd = nccd.data.copy()
 
     return nccd
 
 # todo: doc.
-def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_iter=5, 
+def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, maxiters=5, 
                  sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
                  plot=conf.fig_save, path=conf.fig_path):
-    """Model illumination.
+    """Model illumination. Uncertainty of the model may be dominated by systematic 
+    error which cannot be estimated from data.
 
     Parameters
     ----------
@@ -200,8 +213,10 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         allowing for non-uniform bin widths.
         Default is `5`.
         
-    n_iter : int, optional
-        Number of sigma slipping iterations. Must be >= `0`. 
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
         Default is `5`.
 
     sigma_lower : scalar or `None`, optional
@@ -314,25 +329,22 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
 
             data_fit, residual, threshold_lower, threshold_upper, master_mask = (
                 GaussianSmoothing2D(
-                    x=X, y=Y, z=data_arr, sigma=sigma, mask=None, n_iter=n_iter, 
-                    sigma_lower=sigma_lower, sigma_upper=sigma_upper, axis=0, 
-                    grow=grow, use_relative=True)
+                    X, Y, data_arr, sigma, maxiters=maxiters, sigma_lower=sigma_lower, 
+                    sigma_upper=sigma_upper, axis=0, grow=grow, use_relative=True)
             )
 
         elif method == 'CubicSpline2D':
             
             bispl, residual, threshold_lower, threshold_upper, master_mask = Spline2D(
-                x=X, y=Y, z=data_arr, weight=None, mask=None, order=(3, 3), 
-                n_piece=n_piece, n_iter=n_iter, sigma_lower=sigma_lower, 
-                sigma_upper=sigma_upper, axis=0, grow=grow, use_relative=True)
+                x=X, y=Y, z=data_arr, order=(3, 3), n_piece=n_piece, maxiters=maxiters, 
+                sigma_lower=sigma_lower, sigma_upper=sigma_upper, axis=0, grow=grow, 
+                use_relative=True)
 
             data_fit = bispl(idx_col, idx_row, grid=True).T
         
         master_mask |= mask_arr
         
         data_fit = data_fit.astype(ccd.dtype)
-        rms_arr = np.full(
-            (n_row, n_col), (data_fit * residual)[~master_mask].std(dtype=ccd.dtype))
 
         # In 2D case, ``loc_bin`` is only used as index, thus converted to ``int``.
         idx_bin = loc_bin.astype(int)
@@ -341,7 +353,7 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         bin_mask_arr = master_mask[:, idx_bin].T
         bin_residual = residual[:, idx_bin].T
         # Both are `None` originally
-        if n_iter == 0:
+        if maxiters == 0:
             bin_threshold_lower = [None] * n_bin
             bin_threshold_upper = [None] * n_bin
         # Both ``threshold_lower`` and ``threshold_upper`` are 2-dimensional arrays, 
@@ -358,7 +370,6 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         # Apply mask
         data_arr[mask_arr] = np.nan
 
-        rms_arr = np.zeros_like(data_arr)
         master_mask = np.zeros_like(data_arr, dtype=bool)
 
         bin_data_arr = np.zeros((n_bin, n_row))
@@ -377,12 +388,10 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
             # Fit cubic spline function
             bin_spl, bin_residual[i], bin_threshold_lower[i], bin_threshold_upper[i], \
             bin_mask_arr[i] = Spline1D(
-                x=idx_row, y=bin_data_arr[i], weight=None, mask=bin_mask, order=3, 
-                n_piece=n_piece[i], n_iter=n_iter, sigma_lower=sigma_lower, 
-                sigma_upper=sigma_upper, grow=grow, use_relative=True)
+                x=idx_row, y=bin_data_arr[i], m=bin_mask, order=3, n_piece=n_piece[i], 
+                maxiters=maxiters, sigma_lower=sigma_lower, sigma_upper=sigma_upper, 
+                grow=grow, use_relative=True)
             bin_data_fit[i] = bin_spl(idx_row)
-            rms_arr[:, bin_start:bin_end] = (
-                bin_data_fit[i] * bin_residual[i])[~bin_mask_arr[i]].std()
             master_mask[bin_mask_arr[i], bin_start:bin_end] = True
         
         # Interpolate
@@ -392,7 +401,6 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
 
     if slit_along != 'col':
         data_fit = data_fit.T
-        rms_arr = rms_arr.T
         master_mask = master_mask.T
         n_col, n_row = n_row, n_col
         idx_col, idx_row = idx_row, idx_col
@@ -416,8 +424,8 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
                 fig.subplots_adjust(hspace=0)
 
                 _plotFitting(
-                    ax=ax, x=x, y=bin_data_arr[i], residual=bin_residual[i], 
-                    mask=bin_mask_arr[i], x_fit=x, y_fit=bin_data_fit[i], 
+                    ax=ax, x=x, y=bin_data_arr[i], m=bin_mask_arr[i], x_fit=x, 
+                    y_fit=bin_data_fit[i], r=bin_residual[i], 
                     threshold_lower=bin_threshold_lower[i], 
                     threshold_upper=bin_threshold_upper[i], xlabel='spatial axis [px]', 
                     ylabel='pixel value', use_relative=True)
@@ -431,11 +439,8 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
                 plt.close()
     
     # Illumination
-    nccd.data = deepcopy(data_fit)
-
-    if nccd.uncertainty is not None:
-        nccd.uncertainty.array = deepcopy(rms_arr)
-
+    nccd.data = data_fit.copy()
+    nccd.uncertainty = None
     if nccd.mask is not None:
         nccd.mask[master_mask] = True
 
@@ -448,7 +453,7 @@ def illumination(ccd, slit_along, method, sigma=None, n_piece=None, bins=5, n_it
         nccd = np.ma.array(nccd.data, mask=nccd.mask)
 
     else:
-        nccd = deepcopy(nccd.data)
+        nccd = nccd.data.copy()
 
     return nccd
 
@@ -543,9 +548,9 @@ def align(ccdlist, slit_along, index=0):
     return CCDDataList(nccdlist)
 
 
-def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_iter=5, 
-              sigma_lower=None, sigma_upper=None, grow=False, use_mask=False, 
-              plot=conf.fig_save, path=conf.fig_path, **kwargs):
+def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, 
+              maxiters=5, sigma_lower=None, sigma_upper=None, grow=False, 
+              use_mask=False, plot=conf.fig_save, path=conf.fig_path, **kwargs):
     """Fit distortion across the slit.
     
     Parameters
@@ -573,8 +578,10 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
         Number of spline pieces. Lengths are all equal. Must be positive.
         Default is `3`.
 
-    n_iter : int, optional
-        Number of sigma slipping iterations. Must be >= `0`. 
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
         Default is `5`.
 
     sigma_lower : scalar or `None`, optional
@@ -621,6 +628,8 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
     _validateInteger(n_med, 'n_med', (1, None), (True, None))
     bin_edges, loc_bin, n_bin = _validateBins(n_med, n_row, isWidth=True)
 
+    idx_bin = np.arange(n_bin)
+
     bin_data_arr = np.zeros((n_bin, n_col))
 
     # A precision of 0.05 px for cross-correlation (can be changed)
@@ -630,6 +639,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
     bin_data_arr_dense = np.zeros((n_bin, idx_col_dense.shape[0]))
 
     for i, (bin_start, bin_end) in enumerate(bin_edges):
+
         # Bad pixels should be labeled by ``mask_arr`` in advance
         bin_data = np.nanmean(data_arr[bin_start:bin_end, :], axis=0)
         bin_mask = np.all(mask_arr[bin_start:bin_end, :], axis=0)
@@ -642,7 +652,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
         # Normalize
         bin_data_arr[i] = bin_data / bin_data.max()
-        
+
         # Interpolate to a denser grid
         bin_data_arr_dense[i] = interpolate.interp1d(
             x=idx_col, y=bin_data_arr[i], assume_sorted=True)(idx_col_dense)
@@ -663,7 +673,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
     shift_arr = np.zeros(n_bin)
 
-    for i in range(n_bin):
+    for i in idx_bin:
         # Get zeropoint shift through cross-correlation
         idx_max = signal.correlate(
             bin_data_ref_dense_ext, bin_data_arr_dense[i], mode='valid', method='auto'
@@ -676,8 +686,8 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
         # Univariate cubic spline fitting
         spl, residual, threshold_lower, threshold_upper, mask = Spline1D(
-            x=loc_bin, y=shift_arr, weight=None, mask=None, order=3, n_piece=n_piece, 
-            n_iter=n_iter, sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
+            x=loc_bin, y=shift_arr, order=3, n_piece=n_piece, maxiters=maxiters, 
+            sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
             use_relative=False)
         shift_fit = spl(idx_row)
 
@@ -685,17 +695,17 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
         # Fitting plot
         plotFitting(
-            x=loc_bin, y=shift_arr, residual=residual, mask=mask, x_fit=idx_row, 
-            y_fit=shift_fit, threshold_lower=threshold_lower, 
-            threshold_upper=threshold_upper, xlabel='spatial axis [px]', 
-            ylabel='shift value [px]', title='zeropoint shift curve', show=False, 
-            save=plot, path=path, use_relative=False)
+            x=loc_bin, y=shift_arr, m=mask, x_fit=idx_row, y_fit=shift_fit, r=residual, 
+            threshold_lower=threshold_lower, threshold_upper=threshold_upper, 
+            xlabel='spatial axis [px]', ylabel='shift value [px]', 
+            title='zeropoint shift curve', show=False, save=plot, path=path, 
+            use_relative=False)
 
     else:
 
         shift = np.round(shift_arr * n_sub).astype(int)
         rolled_bin_data_arr_dense = np.zeros_like(bin_data_arr_dense)
-        for i in range(n_bin):
+        for i in idx_bin:
             # Roll to align with reference spectrum
             rolled_bin_data_arr_dense[i] = np.roll(bin_data_arr_dense[i], shift[i])
         bin_data_mean = rolled_bin_data_arr_dense.mean(axis=0)[::n_sub]
@@ -745,7 +755,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
         refined_peaks_arr = np.full((n_bin, n_peak), np.nan)
 
-        for i in range(n_bin):
+        for i in idx_bin:
 
             # Offset peak properties
             shifted_peaks = peaks - shift_arr[i]
@@ -760,7 +770,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
             refined_peaks_arr[i, refined_index] = refined_peaks
 
         # Fitcoords
-        x = deepcopy(refined_peaks_arr)
+        x = refined_peaks_arr.copy()
         y = np.tile(loc_bin, (n_peak, 1)).T
         z = np.tile(peaks, (n_bin, 1))
         mask = np.isnan(x) | np.isnan(z)
@@ -776,9 +786,9 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
         # https://stackoverflow.com/questions/45904929.)
         bbox = [idx_col[0], idx_col[-1], idx_row[0], idx_row[-1]]
         bispl, residual, threshold_lower, threshold_upper, master_mask = Spline2D(
-            x=x, y=y, z=z, weight=None, mask=mask, order=(order, 3), 
-            n_piece=(1, n_piece), bbox=bbox, n_iter=n_iter, sigma_lower=sigma_lower, 
-            sigma_upper=sigma_upper, axis=None, grow=grow, use_relative=False)
+            x=x, y=y, z=z, m=mask, order=(order, 3), n_piece=(1, n_piece), bbox=bbox, 
+            maxiters=maxiters, sigma_lower=sigma_lower, sigma_upper=sigma_upper, axis=None, 
+            grow=grow, use_relative=False)
 
         # !!! Extrapolation is used here (see above) !!!
         U = bispl(idx_col, idx_row, grid=True).T
@@ -789,40 +799,42 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
         if plot:
             
             # Peak detection plot
-            title = 'peak detection'
+            title = 'fitcoords peak detection'
             
-            fig = plt.figure(dpi=100)
-
             # Split into subplots
             n_subplot = 2
+
+            fig, ax = plt.subplots(n_subplot, 1, dpi=100)
+
             length = n_col // n_subplot + 1
             for i in range(n_subplot):
+
                 idx_start, idx_end = i * length, (i + 1) * length
                 idx_peak = np.where((idx_start <= peaks) & (peaks < idx_end))[0]
-                ax = fig.add_subplot(n_subplot, 1, i + 1)
 
-                ax.step(
+                ax[i].step(
                     idx_col[idx_start:idx_end], bin_data_mean[idx_start:idx_end], 
                     color='k', ls='-', where='mid')
                 for idx in idx_peak:
                     ymin = heights[idx] * 1.2
                     ymax = heights[idx] * 1.5
-                    ax.plot([peaks[idx], peaks[idx]], [ymin, ymax], 'r-', lw=1.5)
+                    ax[i].plot([peaks[idx], peaks[idx]], [ymin, ymax], 'r-', lw=1.5)
 
                 # Settings
-                ax.grid(axis='both', color='0.95', zorder=-1)
-                ax.set_xlim(idx_start, idx_end)
-                ax.set_yscale('log')
-                ax.tick_params(
+                ax[i].grid(axis='both', color='0.95', zorder=-1)
+                ax[i].set_xlim(idx_start, idx_end)
+                ax[i].set_yscale('log')
+                ax[i].tick_params(
                     which='major', direction='in', top=True, right=True, length=5, 
                     width=1.5, labelsize=12)
-                ax.tick_params(
+                ax[i].tick_params(
                     which='minor', direction='in', top=True, right=True, length=3, 
                     width=1.5, labelsize=12)
-                ax.set_ylabel('normalized intensity', fontsize=16)
-            ax.set_xlabel('dispersion axis [px]', fontsize=16)
-            ax.set_title(title, fontsize=16)
+                ax[i].set_ylabel('normalized intensity', fontsize=16)
+            ax[-1].set_xlabel('dispersion axis [px]', fontsize=16)
+            ax[0].set_title(title, fontsize=16)
             fig.align_ylabels()
+            fig.set_figheight(fig.get_figwidth() * n_subplot / 2)
             fig.tight_layout()
 
             # Save
@@ -837,7 +849,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
             fig_path = _validatePath(path, 'distortion fitting', '.pdf')
             with PdfPages(fig_path, keep_empty=False) as pdf:
 
-                for i in range(n_bin):
+                for i in idx_bin[::10]:
 
                     fig, ax = plt.subplots(
                         2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
@@ -845,8 +857,8 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3, n_i
 
                     _plotFitting(
                         ax=ax, x=refined_peaks_arr[i], 
-                        y=(peaks - refined_peaks_arr[i]), residual=residual[i], 
-                        mask=master_mask[i], x_fit=idx_col, y_fit=(z_fit[i] - idx_col), 
+                        y=(peaks - refined_peaks_arr[i]), m=master_mask[i], 
+                        x_fit=idx_col, y_fit=(z_fit[i] - idx_col), r=residual[i], 
                         threshold_lower=threshold_lower, 
                         threshold_upper=threshold_upper, xlabel='dispersion axis [px]', 
                         ylabel='shift [px]', use_relative=False)
@@ -898,9 +910,7 @@ def transform(ccd, X, Y, flux=True):
         The transformed frame.
     """
 
-    nccd = _validateCCDData(ccd, 'ccd')
-
-    data_arr = deepcopy(nccd.data)
+    nccd, data_arr, _, _ = _validateCCD(ccd, 'ccd', False, False, False)
 
     n_row, n_col = data_arr.shape
 
@@ -937,18 +947,18 @@ def transform(ccd, X, Y, flux=True):
     data_arr_transformed = ndimage.map_coordinates(
         input=data_arr, coordinates=(Y, X), order=1, mode='nearest')
     data_arr_transformed *= S
-    nccd.data = deepcopy(data_arr_transformed)
+    nccd.data = data_arr_transformed.copy()
 
     # Uncertainty
     # This method is simple but enlarges the resulting uncertainty.
     if nccd.uncertainty is not None:
-        uncertainty_arr = deepcopy(nccd.uncertainty.array)
+        uncertainty_arr = nccd.uncertainty.array.copy()
         uncertainty_arr_transformed = np.sqrt(
             ndimage.map_coordinates(
                 input=uncertainty_arr**2, coordinates=(Y, X), order=1, mode='nearest')
         )
         uncertainty_arr_transformed *= S
-        nccd.uncertainty.array = deepcopy(uncertainty_arr_transformed)
+        nccd.uncertainty.array = uncertainty_arr_transformed.copy()
 
     # Mask
     if nccd.mask is not None:
@@ -962,7 +972,7 @@ def transform(ccd, X, Y, flux=True):
         threshold = 0.1
         mask_arr_transformed[mask_arr_transformed >= threshold] = 1.
         mask_arr_transformed = np.round(mask_arr_transformed).astype(bool)
-        nccd.mask = deepcopy(mask_arr_transformed)
+        nccd.mask = mask_arr_transformed.copy()
 
     # Output
     if isinstance(ccd, CCDData):
@@ -973,15 +983,15 @@ def transform(ccd, X, Y, flux=True):
         nccd = np.ma.array(nccd.data, mask=nccd.mask)
 
     else:
-        nccd = deepcopy(nccd.data)
+        nccd = nccd.data.copy()
 
     return nccd
 
 # todo: doc
 def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=None, 
-          n_piece=3, n_iter=5, sigma_lower=None, sigma_upper=None, grow=False, 
-          use_mask=False, title='trace', show=conf.fig_show, save=conf.fig_save, 
-          path=conf.fig_path):
+          n_piece=3, maxiters=5, sigma_lower=None, sigma_upper=None, grow=False, 
+          negative=False, use_mask=False, title='trace', show=conf.fig_show, 
+          save=conf.fig_save, path=conf.fig_path):
     """Trace on the 2-dimensional spectrum.
     
     First the spatial profiles are binned by taking median along the dispersion axis. 
@@ -1027,8 +1037,10 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
         Number of spline pieces. Lengths are all equal. Must be positive. 
         Default is `3`.
     
-    n_iter : int, optional
-        Number of sigma slipping iterations. Must be >= `0`. 
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
         Default is `5`.
 
     sigma_lower : scalar or `None`, optional
@@ -1042,7 +1054,12 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
     grow : scalar or `False`, optional
         Radius within which to mask the neighbouring pixels of those that fall outwith 
         the clipping limits.
-    
+
+    negative : bool, optional
+        The spectrum is negative or not. If `True`, the negative frame (the input frame 
+        multiplied by `-1`) is used in traceing.
+        Default is `False`.
+
     use_mask : bool, optional
         If `True` and a mask array is attributed to ``ccd``, the masked pixels are 
         ignored in the fitting. 
@@ -1056,12 +1073,17 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
     
     _validateString(slit_along, 'slit_along', ['col', 'row'])
 
+    _validateBool(negative, 'negative')
+
     _validateBool(use_mask, 'use_mask')
 
     if slit_along == 'col':
         nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, False)
     else:
         nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, True)
+
+    if negative:
+        data_arr *= -1
 
     n_row, n_col = data_arr.shape
 
@@ -1201,8 +1223,8 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
         
         # Spline fitting
         spl, residual, threshold_lower, threshold_upper, master_mask = Spline1D(
-            x=loc_bin, y=refined_trace, weight=None, mask=mask, order=3, n_piece=n_piece, 
-            n_iter=n_iter, sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
+            x=loc_bin, y=refined_trace, m=mask, order=3, n_piece=n_piece, 
+            maxiters=maxiters, sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
             use_relative=False)
 
         fitted_trace = spl(idx_col)
@@ -1220,22 +1242,19 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
         # Trace fitting plot
         if method == 'trace':
             plotFitting(
-                x=loc_bin, y=refined_trace, residual=residual, mask=master_mask, 
-                x_fit=idx_col, y_fit=fitted_trace, threshold_lower=threshold_lower, 
+                x=loc_bin, y=refined_trace, m=master_mask, x_fit=idx_col, 
+                y_fit=fitted_trace, r=residual, threshold_lower=threshold_lower, 
                 threshold_upper=threshold_upper, xlabel='dispersion axis [px]', 
                 ylabel='spatial axis [px]', title=title, show=show, save=save, 
                 path=path, use_relative=False)
 
         # Trace image
-        if slit_along == 'col':
-            height_ratios = (1 / 4.5, n_col / n_row)
-        else:
-            height_ratios = (1 / 4.5, n_row / n_col)
+        height_ratios = (1 / 4.5, n_col / n_row)
         fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=height_ratios, dpi=100)
 
         # Subplot 1
         ax[0].step(idx_row, count_ref, 'k-', lw=1.5, where='mid')
-        ax[0].axvline(x=center_ref, color='r', ls='-', lw=1.5)
+        ax[0].axvline(x=center_ref, color='r', ls='--', lw=1.5)
 
         # Settings
         ax[0].grid(axis='both', color='0.95', zorder=-1)
@@ -1248,15 +1267,14 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
 
         # Subplot 2
         if slit_along == 'col':
-            _plot2d(
-                ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
-                xlabel='row', ylabel='column', aspect='auto')
+            xlabel, ylabel = 'row', 'column'
         else:
-            _plot2d(
-                ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, cbar=False, 
-                aspect='auto')
+            xlabel, ylabel = 'column', 'row'
+        _plot2d(
+            ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
+            xlabel=xlabel, ylabel=ylabel, aspect='auto')
         (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
-        ax[1].plot(fitted_trace, idx_col, 'r-', lw=1.5)
+        ax[1].plot(fitted_trace, idx_col, 'r--', lw=1.5)
 
         # Settings
         ax[1].set_xlim(xmin, xmax)
@@ -1273,11 +1291,12 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
 
         plt.close()
 
-    header = deepcopy(nccd.header)
+    header = nccd.header.copy()
     header['TRINTERV'] = f'{interval}'
     header['TRCENTER'] = center_ref
     header['TRACE'] = '{} Trace ({}, n_med = {}, n_piece = {})'.format(
         Time.now().to_value('iso', subfmt='date_hm'), method, n_med, n_piece)
+    
     meta = {'header': header}
 
     # No uncertainty or mask frame
@@ -1286,10 +1305,10 @@ def trace(ccd, slit_along, fwhm, method, n_med=3, reference_bin=None, interval=N
     return trace1d
 
 
-def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1, 
-               n_iter=5, sigma_lower=None, sigma_upper=None, grow=False, 
-               use_mask=False, title='background', show=conf.fig_show, 
-               save=conf.fig_save, path=conf.fig_path):
+def background(ccd, slit_along, trace1d=None, location=75, aper_width=50, degree=0, 
+               maxiters=5, sigma_lower=None, sigma_upper=None, grow=False, 
+               use_uncertainty=False, use_mask=False, title='background', 
+               show=conf.fig_show, save=conf.fig_save, path=conf.fig_path):
     """Model background.
     
     Sky background of the input frame is modeled col by col (or row by row, depending 
@@ -1304,22 +1323,26 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
         `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
         calculations. Note that this will NOT affect the returned frame, which is 
         always of the same shape as ``ccd``.
-    
-    trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray`
+
+    trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray` or `None`, optional
         Input trace.
-    
-    distance : scalar or 2-tuple, optional
-        Distances from the input trace to the centers of the two background apertures.
-    
-    aper_width : scalar or 2-tuple, optional
-        Aperture widths of the two background apertures.
-        
+
+    location : scalar or 2-tuple, optional
+        Location of the background apertures. If ``trace1d`` is `None`, ``location`` is 
+        taken as absolute location along the slit, otherwise it is taken as the 
+        distances from the input trace.
+
+    aper_width : scalar or tuple, optional
+        Aperture widths of the background apertures.
+
     degree : int, optional
         Degree of the fitting polynomial.
-        Default is `1`.
+        Default is `0`.
     
-    n_iter : int, optional
-        Number of sigma slipping iterations. Must be >= `0`. 
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
         Default is `5`.
 
     sigma_lower : scalar or `None`, optional
@@ -1334,6 +1357,12 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
         Radius within which to mask the neighbouring pixels of those that fall outwith 
         the clipping limits.
 
+    use_uncertainty : bool, optional
+        If `True` and an uncertainty array is attributed to ``ccd``, the uncertainties 
+        are used as weights in the fitting. Note that weighted fitting is biased 
+        towards low values.
+        Default is `False`.
+
     use_mask : bool, optional
         If `True` and a mask array is attributed to ``ccd``, the masked pixels are 
         ignored in the fitting. 
@@ -1347,62 +1376,88 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
     _validateString(slit_along, 'slit_along', ['col', 'row'])
 
+    _validateBool(use_uncertainty, 'use_uncertainty')
+
     _validateBool(use_mask, 'use_mask')
 
     if slit_along == 'col':
-        nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, False)
+        nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
+            ccd, 'ccd', use_uncertainty, use_mask, False, asWeight=True)
 
     else:
-        nccd, data_arr, _, mask_arr = _validateCCD(ccd, 'ccd', False, use_mask, True)
+        nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
+            ccd, 'ccd', use_uncertainty, use_mask, True, asWeight=True)
 
     n_row, n_col = data_arr.shape
 
     idx_row, idx_col = np.arange(n_row), np.arange(n_col)
 
-    # Assume that unit of the trace is [pixel]
-    if isinstance(trace1d, Spectrum1D):
+    # Weights (inverse variance weighted)
+    wght_arr = 1 / uncertainty_arr
+
+    # Assume that unit of the trace is [pixel]. No NaN is assumed.
+    if trace1d is None:
+        trace1d = np.zeros(n_col)
+    elif isinstance(trace1d, Spectrum1D):
         trace1d = trace1d.flux.value
-    trace1d = _validate1DArray(trace1d, 'trace1d', n_col, True)
+    else:
+        trace1d = _validate1DArray(trace1d, 'trace1d', n_col, True)
 
-    distance = _validate1DArray(distance, 'distance', 2, True)
+    if np.ndim(location) == 0:
+        location = np.array([location])
+    else:
+        location = _validateNDArray(location, 'location', 1)
 
-    aper_width = _validate1DArray(aper_width, 'aper_width', 2, True)
-    for i in range(2):
+    n_aper = location.shape[0]
+
+    aper_width = _validate1DArray(aper_width, 'aper_width', n_aper, True)
+
+    idx_min_arr = np.zeros((n_aper, n_col))
+    idx_max_arr = np.zeros((n_aper, n_col))
+    mask_background = np.zeros((n_aper, n_col, n_row), dtype=bool)
+    for i in range(n_aper):
+
         _validateRange(aper_width[i], f'aper_width[{i}]', (1, None), (True, None))
 
-    # Usually there are two separate background apertures (though they can be set 
-    # overlapped). ``distance`` controls separations on either side of the trace.
-    idx_lbkg_min = trace1d - distance[0] - aper_width[0] / 2
-    idx_lbkg_max = trace1d - distance[0] + aper_width[0] / 2
-    idx_rbkg_min = trace1d + distance[1] - aper_width[1] / 2
-    idx_rbkg_max = trace1d + distance[1] + aper_width[1] / 2
-    
-    if (
-        (idx_lbkg_min.min() < -0.5) | (idx_lbkg_max.max() > (n_row - 0.5)) | 
-        (idx_rbkg_min.min() < -0.5) | (idx_rbkg_max.max() > (n_row - 0.5))
-    ):
-        warnings.warn('Background index out of range.', RuntimeWarning)
-    
-    bkg_arr = np.zeros_like(data_arr)
-    std_arr = np.zeros_like(data_arr)
+        # Usually the background apertures are separated (though they can be set 
+        # overlapped). ``location`` controls separations on either side of the trace.
+        idx_min_arr[i] = (trace1d + location[i] - aper_width[i] / 2)
+        idx_max_arr[i] = (trace1d + location[i] + aper_width[i] / 2)
 
-    # Background fitting
-    for i in range(n_col):
-
-        mask_bkg = (
-            ((idx_lbkg_min[i] < idx_row) & (idx_row < idx_lbkg_max[i])) | 
-            ((idx_rbkg_min[i] < idx_row) & (idx_row < idx_rbkg_max[i]))
+        idx_row_arr = np.tile(idx_row, (n_col, 1))
+        mask_background[i] = (
+            (idx_min_arr[i, np.newaxis].T <= idx_row_arr) 
+            & (idx_row_arr <= idx_max_arr[i, np.newaxis].T)
         )
 
-        p, residual, threshold_lower, threshold_upper, master_mask = Poly1D(
-            x=idx_row[mask_bkg], y=data_arr[mask_bkg, i], weight=None, 
-            mask=mask_arr[mask_bkg, i], degree=degree, n_iter=n_iter, 
+    mask_background = np.any(mask_background, axis=0)
+
+    idx_bkgd_min = idx_min_arr.min()
+    idx_bkgd_max = idx_max_arr.max()
+    if (idx_bkgd_min < -0.5) | (idx_bkgd_max > (n_row - 0.5)):
+        warnings.warn('Background index out of range.', RuntimeWarning)
+
+    if np.any(mask_background.sum(axis=1) == 0):
+        raise RunTimeError('Background index out of range.')
+
+    # Background fitting
+    bkgd_arr = np.zeros_like(data_arr)
+    rsdl_arr = np.zeros_like(data_arr)
+    threshold_lower = [None] * n_col
+    threshold_upper = [None] * n_col
+    for i in range(n_col):
+
+        mask_bkgd = mask_background[i]
+
+        p, rsdl_arr[mask_bkgd, i], threshold_lower[i], threshold_upper[i], \
+        mask_arr[mask_bkgd, i] = Poly1D(
+            x=idx_row[mask_bkgd], y=data_arr[mask_bkgd, i], w=wght_arr[mask_bkgd, i], 
+            m=mask_arr[mask_bkgd, i], deg=degree, maxiters=maxiters, 
             sigma_lower=sigma_lower, sigma_upper=sigma_upper, grow=grow, 
             use_relative=False)
 
-        bkg_arr[:, i] = p(idx_row)
-        mask_arr[mask_bkg, i][master_mask] = True
-        std_arr[:, i] = residual.std()
+        bkgd_arr[:, i] = p(idx_row)
+        rsdl_arr[~mask_bkgd, i] = data_arr[~mask_bkgd, i] - bkgd_arr[~mask_bkgd, i]
 
     # Plot
     _validateBool(show, 'show')
@@ -1415,18 +1470,14 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
             title = f'{title} background'
         
         # Background image
-        if slit_along == 'col':
-            height_ratios = (1 / 4.5, n_col / n_row)
-        else:
-            height_ratios = (1 / 4.5, n_row / n_col)
+        height_ratios = (1 / 4.5, n_col / n_row)
         fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=height_ratios, dpi=100)
 
         # Subplot 1
         ax[0].step(idx_row, np.nanmedian(data_arr, axis=1), 'k-', lw=1.5, where='mid')
-        ax[0].axvline(x=idx_lbkg_min.mean(), color='y', ls='--', lw=1.5)
-        ax[0].axvline(x=idx_lbkg_max.mean(), color='y', ls='--', lw=1.5)
-        ax[0].axvline(x=idx_rbkg_min.mean(), color='b', ls='--', lw=1.5)
-        ax[0].axvline(x=idx_rbkg_max.mean(), color='b', ls='--', lw=1.5)
+        for i in range(n_aper):
+            ax[0].axvline(x=idx_min_arr[i].mean(), color=f'C{i}', ls='--', lw=1.5)
+            ax[0].axvline(x=idx_max_arr[i].mean(), color=f'C{i}', ls='--', lw=1.5)
 
         # Settings
         ax[0].grid(axis='both', color='0.95', zorder=-1)
@@ -1438,18 +1489,16 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
         # Subplot 2
         if slit_along == 'col':
-            _plot2d(
-                ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
-                xlabel='row', ylabel='column', aspect='auto')
+            xlabel, ylabel = 'row', 'column'
         else:
-            _plot2d(
-                ax=ax[1], ccd=data_arr, cmap='Greys_r', contrast=0.25, cbar=False, 
-                aspect='auto')
+            xlabel, ylabel = 'column', 'row'
+        _plot2d(
+            ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
+            xlabel=xlabel, ylabel=ylabel, aspect='auto')
         (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
-        ax[1].plot(idx_lbkg_min, idx_col, 'y--', lw=1.5)
-        ax[1].plot(idx_lbkg_max, idx_col, 'y--', lw=1.5)
-        ax[1].plot(idx_rbkg_min, idx_col, 'b--', lw=1.5)
-        ax[1].plot(idx_rbkg_max, idx_col, 'b--', lw=1.5)
+        for i in range(n_aper):
+            ax[1].plot(idx_min_arr[i], idx_col, '--', color=f'C{i}', lw=1.5)
+            ax[1].plot(idx_max_arr[i], idx_col, '--', color=f'C{i}', lw=1.5)
 
         # Settings
         ax[1].set_xlim(xmin, xmax)
@@ -1458,7 +1507,7 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
         fig.tight_layout()
 
         if save:
-            fig_path = _validatePath(path, title)
+            fig_path = _validatePath(path, f'{title} aperture')
             plt.savefig(fig_path, dpi=100)
 
         if show:
@@ -1469,6 +1518,12 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
     # Background fitting plot
     if save:
 
+        idx_bkgd_range = idx_bkgd_max - idx_bkgd_min
+        mask_plot = (
+            ((idx_bkgd_min - 0.1 * idx_bkgd_range) <= idx_row) 
+            & (idx_row <= (idx_bkgd_max + 0.1 * idx_bkgd_range))
+        )
+
         fig_path = _validatePath(path, f'{title} fitting', '.pdf')
         with PdfPages(fig_path, keep_empty=False) as pdf:
 
@@ -1478,13 +1533,31 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
                 fig.subplots_adjust(hspace=0)
 
                 _plotFitting(
-                    ax=ax, x=idx_row, y=data_arr[:, i], 
-                    residual=(data_arr[:, i] - bkg_arr[:, i]), mask=mask_arr[:, i], 
-                    x_fit=idx_row, y_fit=bkg_arr[:, i], threshold_lower=None, 
-                    threshold_upper=None, xlabel='spatial axis [px]', 
+                    ax=ax, x=idx_row, y=data_arr[:, i], m=mask_arr[:, i], 
+                    x_fit=idx_row, y_fit=bkgd_arr[:, i], r=rsdl_arr[:, i], 
+                    threshold_lower=threshold_lower[i], 
+                    threshold_upper=threshold_upper[i], xlabel='spatial axis [px]', 
                     ylabel='pixel value', use_relative=False)
 
+                for j in range(n_aper):
+                    ax[0].axvline(x=idx_min_arr[j, i], color=f'C{i}', ls='--', lw=1.5)
+                    ax[0].axvline(x=idx_max_arr[j, i], color=f'C{i}', ls='--', lw=1.5)
+
+                # Settings
+                ax[0].set_xlim(
+                    idx_bkgd_min - 0.1 * idx_bkgd_range, 
+                    idx_bkgd_max + 0.1 * idx_bkgd_range)
                 ax[0].set_title(f'background at column {i}', fontsize=16)
+
+                for j in range(n_aper):
+                    ax[1].axvline(x=idx_min_arr[j, i], color=f'C{i}', ls='--', lw=1.5)
+                    ax[1].axvline(x=idx_max_arr[j, i], color=f'C{i}', ls='--', lw=1.5)
+
+                # Settings
+                ax[1].set_xlim(
+                    idx_bkgd_min - 0.1 * idx_bkgd_range, 
+                    idx_bkgd_max + 0.1 * idx_bkgd_range)
+
                 fig.align_ylabels()
                 fig.tight_layout()
 
@@ -1494,19 +1567,16 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
 
     # Background frame
     if slit_along == 'col':
-        nccd.data = deepcopy(bkg_arr)
 
-        if nccd.uncertainty is not None:
-            nccd.uncertainty.array = deepcopy(std_arr)
-
+        nccd.data = bkgd_arr.copy()
+        nccd.uncertainty = None
         if nccd.mask is not None:
-            nccd.mask = deepcopy(mask_arr)
+            nccd.mask = mask_arr.copy()
+
     else:
-        nccd.data = bkg_arr.T
 
-        if nccd.uncertainty is not None:
-            nccd.uncertainty.array = std_arr.T
-
+        nccd.data = bkgd_arr.T
+        nccd.uncertainty = None
         if nccd.mask is not None:
             nccd.mask = mask_arr.T
 
@@ -1519,13 +1589,223 @@ def background(ccd, slit_along, trace1d, distance=50, aper_width=50, degree=1,
         nccd = np.ma.array(nccd.data, mask=nccd.mask)
 
     else:
-        nccd = deepcopy(nccd.data)
+        nccd = nccd.data.copy()
 
     return nccd
 
 
-def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper=1, 
-            spectral_axis=None, title='aperture', show=conf.fig_show, 
+def profile(ccd, slit_along, trace1d, profile_width, window_length, polyorder=3, 
+            deriv=0, delta=1.0, title='profile', show=conf.fig_show, 
+            save=conf.fig_save, path=conf.fig_path):
+    """Build an effective spatial profile along slit. Usually used by the optimal 
+    extraction algorithm.
+
+    Parameters
+    ----------
+    ccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
+        Input frame. Should be background subtracted.
+
+    slit_along : str
+        `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
+        calculations. Note that this will NOT affect the returned frame, which is 
+        always of the same shape as ``ccd``.
+
+    trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray`
+        Input trace.
+
+    profile_width : scalar or 2-tuple
+        Profile width. Usually large widths are preferred. Pixels outside the profile 
+        will be set to `0`.
+    
+    window_length : int
+        The length of the filter window (i.e., the number of coefficients). Must be 
+        less than or equal to the column number.
+
+    polyorder : int, optional
+        The order of the polynomial used to fit the samples. Must be less than 
+        ``window_length``. The default is `3`.
+
+    deriv : int, optional
+        The order of the derivative to compute. Must be a nonnegative integer. The 
+        default is `0`, which means to filter the data without differentiating.
+
+    delta : float, optional
+        The spacing of the samples to which the filter will be applied. This is only 
+        used if ``deriv`` > 0. Default is `1.0`.
+
+    Returns
+    -------
+    P_fit : `~numpy.ndarray`
+        Fitted spatial profile.
+    
+    nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
+        The input frame with updated cosmic ray mask.
+    """
+
+    _validateString(slit_along, 'slit_along', ['col', 'row'])
+
+    _validateBool(use_mask, 'use_mask')
+
+    if slit_along == 'col':
+        nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
+            ccd, 'ccd', False, use_mask, transpose=False)
+    else:
+        nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
+            ccd, 'ccd', False, use_mask, transpose=True)
+
+    n_row, n_col = data_arr.shape
+
+    idx_row, idx_col = np.arange(n_row), np.arange(n_col)
+
+    # Assume that unit of the trace is [pixel]
+    if isinstance(trace1d, Spectrum1D):
+        try:
+            trcenter = trace1d.meta['header']['TRCENTER']
+        except:
+            trcenter = np.median(
+                _validate1DArray(trace1d.flux.value, 'trace1d', n_col, True)
+            )
+    else:
+        trcenter = np.median(_validate1DArray(trace1d, 'trace1d', n_col, True))
+
+    # The total profile width is the sum of the two elements in ``profile_width``. If 
+    # they have opposite signs, the whole aperture will be on the same side of the 
+    # trace.
+    profile_width = _validateAperture(profile_width, 'profile_width')
+    profile_width[0] *= -1; profile_width.sort()
+
+    profile_edges = np.round(trcenter + profile_width).astype(int)
+
+    n_frac = profile_edges[1] + 1 - profile_edges[0]
+
+    idx_frac = np.arange(n_frac)
+
+    slice_frac = slice(profile_edges[0], profile_edges[1] + 1)
+
+    # DS -- data with sky background subtracted (Horne 1986)
+    DS = data_arr.copy()
+
+    # V -- variance (Horne 1986)
+    V = uncertainty_arr**2
+
+    # f = Σ(D-S) --- object flux by summing along the spatial dimension (Horne 1986)
+    f = DS[slice_frac].sum(axis=0)
+
+    # Observed profile
+    P_obs = DS / f
+
+    # (X, Y) grid
+    X = np.tile(idx_col, (n_frac, 1))
+    Y = np.tile(idx_frac, (n_col, 1)).T
+
+    P_fit = np.zeros_like(P_obs)
+    master_mask = mask_arr.copy()
+
+    P_fit[slice_frac] = signal.savgol_filter(
+        P_obs[slice_frac], window_length=window_length, polyorder=polyorder, 
+        deriv=deriv, delta=delta, axis=-1, mode='interp', cval=0.0)
+
+    residual = P_obs[slice_frac] - P_fit[slice_frac]
+    
+    stddev = np.std(residual, axis=-1, ddof=1)
+    threshold_lower, threshold_upper = -3 * stddev, 3 * stddev
+    
+    master_mask[slice_frac] = (
+        (residual < threshold_lower[:, np.newaxis]) | 
+        (threshold_upper[:, np.newaxis] < residual)
+    )
+
+    # Non-negative
+    P_fit = np.max(np.stack([P_fit, np.zeros_like(P_fit)]), axis=0)
+    # Normalization
+    P_fit /= P_fit.sum(axis=0)
+
+    # Plot
+    _validateBool(show, 'show')
+    _validateBool(save, 'save')
+
+    if show | save:
+
+        _validateString(title, 'title')
+        if title != 'profile':
+            title = f'{title} profile'
+
+        fig, ax = plt.subplots(1, 1, dpi=100)
+
+        _plot2d(ax=ax, ccd=P_fit, cmap='Greys_r', contrast=0.25, aspect='auto')
+        (xmin, xmax), (ymin, ymax) = ax.get_xlim(), ax.get_ylim()
+        if slit_along == 'col':
+            for profile_edge in profile_edges:
+                ax.axhline(y=profile_edge, ls='--', color='r', lw=1.5)
+        else:
+            for profile_edge in profile_edges:
+                ax.axvline(x=profile_edge, ls='--', color='r', lw=1.5)
+
+        # Settings
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_title(title, fontsize=16)
+        fig.set_figheight(n_row / n_col * fig.get_figwidth())
+        fig.tight_layout()
+
+        if save:
+            fig_path = _validatePath(path, title)
+            plt.savefig(fig_path, dpi=100)
+
+        if show:
+            plt.show()
+
+        plt.close()
+
+    if save:
+
+        fig_path = _validatePath(path, f'{title} fitting', '.pdf')
+        with PdfPages(fig_path, keep_empty=False) as pdf:
+
+            for i in idx_frac:
+
+                fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=[3, 1], dpi=100)
+                fig.subplots_adjust(hspace=0)
+
+                _plotFitting(
+                    ax=ax, x=idx_col, y=P_obs[slice_frac][i], 
+                    m=master_mask[slice_frac][i], x_fit=idx_col, 
+                    y_fit=P_fit[slice_frac][i], r=residual[i], 
+                    threshold_lower=threshold_lower[i], 
+                    threshold_upper=threshold_upper[i], xlabel='dispersion axis [px]', 
+                    ylabel='fraction', use_relative=False)
+
+                # Settings
+                ax[0]
+                ax[0].set_title(f'profile at row {idx_row[slice_frac][i]}', fontsize=16)
+
+                fig.align_ylabels()
+                fig.tight_layout()
+
+                pdf.savefig(fig, dpi=100)
+
+                plt.close()
+
+    nccd.mask = master_mask.copy()
+
+    # Output
+    if isinstance(ccd, CCDData):
+        nccd.header['PROFILE'] = '{} Uncertainty and mask refined.'.format(
+            Time.now().to_value('iso', subfmt='date_hm'))
+
+    elif np.ma.isMaskedArray(ccd):
+        nccd = np.ma.array(nccd.data, mask=nccd.mask)
+
+    else:
+        nccd = nccd.data.copy()
+
+    return P_fit, nccd
+
+
+def extract(ccd, slit_along, method, trace1d=None, aper_width=None, n_aper=None, 
+            profile2d=None, background2d=None, rdnoise=None, maxiters=None, 
+            sigma_lower=None, sigma_upper=None, grow=None, spectral_axis=None, 
+            use_uncertainty=True, use_mask=True, title='aperture', show=conf.fig_show, 
             save=conf.fig_save, path=conf.fig_path):
     """Extract 1-dimensional spectra.
     
@@ -1538,31 +1818,65 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
         `col` or `row`. If `row`, the data array of ``ccd`` will be transposed during 
         calculations. Note that this will NOT affect the returned trace.
     
-    trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray`
-        Input trace.
-    
-    aper_width : scalar or 2-tuple
-        Aperture width.
-    
     method : str
-        Extraction method. `optimal` or `sum`, and
-        - if `optimal`, the optimal extraction algorithm will be used. The spatial 
-        profile will be normalized to unity within ``psf_width``, and then pixels 
-        within ``aper_width`` will be used to compute the source flux. Only one 
-        spectrum will be extracted regardless of ``n_aper``.
-        - if `sum`, the source flux from the pixels within ``aper_width`` will be 
-        summed.
+        Extraction method. `sum` or `optimal`, and
+        - if `sum`, the source flux from the pixels within an aperture defined by 
+        ``trace1d`` and ``aper_width`` are summed. The ``n_aper`` argument allows the 
+        users to divide the whole aperture into several sub-apertures.
+        - if `optimal`, the optimal extraction algorithm will be used. The normalized 
+        spatial profile is used to compute the source flux. The sky background and 
+        readout noise are used to estimate variance iteratively. ``n_aper`` is ignored.
+
+    trace1d : `~specutils.Spectrum1D` or scalar or `~numpy.ndarray` or `None`, optional
+        Input trace (used by summation extraction algorithm).
     
-    psf_width : scalar or 2-tuple or `None`, optional
-        Width of the point spread function (used by the optimal extraction algorithm). 
-        If `None`, it will be set equal to ``aper_width``.
-    
-    n_aper : int, optional
+    aper_width : scalar or 2-tuple or `None`, optional
+        Aperture width (used by summation extraction algorithm).
+
+    n_aper : int or `None`, optional
         Number of sub-apertures (used by the summation extraction algorithm).
         Default is `1`.
 
+    profile2d : `~numpy.ndarray` or `None`, optional
+        Spatial profile (used by the optimal extraction algorithm).
+
+    background2d : `~numpy.ndarray`
+        Pre-modeled sky background of ``ccd``. Used to estimate variance iteratively. 
+        Note that this sky background should have already been subtraced from ``ccd``.
+
+    rdnoise : scalar
+        Readout noise of ``ccd``. Used to estimate variance iteratively.
+
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations to perform. If convergence is 
+        achieved prior to ``maxiters`` iterations, the clipping iterations will stop. 
+        Must be >= `0`. 
+        Default is `5`.
+
+    sigma_lower : scalar or `None`, optional
+        Number of standard deviations to use as the lower bound for the clipping limit. 
+        If `None` (default), `3` is used.
+
+    sigma_upper : scalar or `None`, optional
+        Number of standard deviations to use as the upper bound for the clipping limit. 
+        If `None` (default), `3` is used.
+    
+    grow : scalar or `False`, optional
+        Radius within which to mask the neighbouring pixels of those that fall outwith 
+        the clipping limits.
+
     spectral_axis : `~astropy.units.Quantity` or `None`
         Spectral axis of the extracted 1-dimensional spectra.
+
+    use_uncertainty : bool, optional
+        If `True` and an uncertainty array is attributed to ``ccd``, the uncertainties 
+        are used as weights in the fitting. 
+        Default is `False`.
+
+    use_mask : bool, optional
+        If `True` and a mask array is attributed to ``ccd``, the masked pixels are 
+        ignored in the fitting. 
+        Default is `False`.
 
     Returns
     -------
@@ -1574,48 +1888,31 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
     
     if slit_along == 'col':
         nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
-            ccd, 'ccd', True, True, False)
+            ccd, 'ccd', use_uncertainty, use_mask, False)
     else:
         nccd, data_arr, uncertainty_arr, mask_arr = _validateCCD(
-            ccd, 'ccd', True, True, True)
+            ccd, 'ccd', use_uncertainty, use_mask, True)
 
     n_row, n_col = data_arr.shape
 
     idx_row, idx_col = np.arange(n_row), np.arange(n_col)
 
-    # Assume that unit of the trace is [pixel]
-    if isinstance(trace1d, Spectrum1D):
-        trace1d = trace1d.flux.value
-    trace1d = _validate1DArray(trace1d, 'trace1d', n_col, True)
-    
-    # The total aperture width is the sum of ``aper_width[0]`` and ``aper_width[1]``. 
-    # If they have opposite signs, the whole aperture will be on one side of the trace.
-    aper_width = _validateAperture(aper_width, 'aper_width')
-    aper_width[0] *= -1; aper_width.sort()
-    
-    _validateString(method, 'method', ['optimal', 'sum'])
-    
-    if method == 'optimal':
-        
-        if psf_width is None:
-            psf_width = aper_width
-        else:
-            psf_width = _validateAperture(psf_width, 'psf_width')
-            psf_width[0] *= -1; psf_width.sort()
-            if (psf_width[0] > aper_width[0]) | (psf_width[1] < aper_width[1]):
-                raise ValueError('``aper_width`` should be <= ``psf_width.')
-        
-        psf_edges = np.vstack([np.round(trace1d).astype(int) + round(psf_width[0]), 
-                               np.round(trace1d).astype(int) + round(psf_width[1])]).T
-        
-        psf_arr = np.zeros(((psf_edges[0][1] - psf_edges[0][0] + 1), n_col))
-        for i, psf_edge in enumerate(psf_edges):
-            psf_arr[:, i] = data_arr[psf_edge[0]:(psf_edge[1] + 1), i]
-        
-        # aper_edges = trace1d + np.array([aper_width[0], aper_width[1]])[:, np.newaxis]
-        print(psf_arr)
-        
-    else:
+    _validateString(method, 'method', ['sum', 'optimal'])
+
+    variance_arr = uncertainty_arr**2
+
+    if method == 'sum':
+
+        # Assume that unit of the trace is [pixel]
+        if isinstance(trace1d, Spectrum1D):
+            trace1d = trace1d.flux.value
+        trace1d = _validate1DArray(trace1d, 'trace1d', n_col, True)
+
+        # The total aperture width is the sum of the two elements of ``aper_width``. If 
+        # they have opposite signs, the whole aperture will be on the same side of the 
+        # trace.
+        aper_width = _validateAperture(aper_width, 'aper_width')
+        aper_width[0] *= -1; aper_width.sort()
         
         _validateInteger(n_aper, 'n_aper', (1, None), (True, None))
         
@@ -1627,9 +1924,7 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
             raise ValueError('Aperture edge is out of range.')
 
         data_aper = np.zeros((n_aper, n_col))
-
-        uncertainty_aper = np.zeros((n_aper, n_col)) # !!! Variance !!!
-
+        variance_aper = np.zeros((n_aper, n_col))
         mask_aper = np.zeros((n_aper, n_col), dtype=bool)
 
         for i in idx_col:
@@ -1641,7 +1936,7 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
                 # Internal pixels
                 mask = (aper_start[j] < idx_row - 0.5) & (idx_row + 0.5 < aper_end[j])
                 data_aper[j, i] = data_arr[mask, i].sum()
-                uncertainty_aper[j, i] = np.sum(uncertainty_arr[mask, i]**2)
+                variance_aper[j, i] = np.sum(variance_arr[mask, i])
                 mask_aper[j, i] = np.any(mask_arr[mask, i])
 
                 # Edge pixels
@@ -1656,8 +1951,8 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
                 if idx_start == idx_end:
                     data_aper[j, i] += (
                         data_arr[idx_end, i] * (aper_end[j] - aper_start[j]))
-                    uncertainty_aper[j, i] += (
-                        uncertainty_arr[idx_end, i] * (aper_end[j] - aper_start[j]))**2
+                    variance_aper[j, i] += (
+                        variance_arr[idx_end, i] * (aper_end[j] - aper_start[j])**2)
                     mask_aper[j, i] |= mask_arr[idx_end, i]
 
                 # in different pixels
@@ -1666,15 +1961,81 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
                         data_arr[idx_start, i] * (idx_start + 0.5 - aper_start[j])
                         + data_arr[idx_end, i] * (aper_end[j] - (idx_end - 0.5))
                     )
-                    uncertainty_aper[j, i] += (
-                        (uncertainty_arr[idx_start, i]
-                         * (idx_start + 0.5 - aper_start[j]))**2 
-                        + (uncertainty_arr[idx_end, i] 
-                           * (aper_end[j] - (idx_end - 0.5)))**2
+                    variance_aper[j, i] += (
+                        (variance_arr[idx_start, i]
+                         * (idx_start + 0.5 - aper_start[j])**2)
+                        + (variance_arr[idx_end, i] 
+                           * (aper_end[j] - (idx_end - 0.5))**2)
                     )
                     mask_aper[j, i] |= mask_arr[idx_start, i] | mask_arr[idx_end, i]
 
-        uncertainty_aper = np.sqrt(uncertainty_aper) # Standard deviation
+        uncertainty_aper = np.sqrt(variance_aper)
+    
+    else:
+
+        # P -- spatial profile (Horne 1986)
+        P = _validateNDArray(profile2d, 'profile2d', data_arr.ndim)
+        # S -- sky background (Horne 1986)
+        S = _validateNDArray(background2d, 'background2d', data_arr.ndim)
+        if not (data_arr.shape == P.shape == S.shape):
+            raise ValueError(
+                'The input frame, the spatial profile, and the sky background should '
+                'have the same shape.'
+            )
+
+        _validateRange(rdnoise, 'rdnoise', (0, None), (True, None))
+
+        _validateInteger(maxiters, 'maxiters', (0, None), (True, None))
+
+        # V -- variance (Horne 1986)
+        V_inverse = (1 / variance_arr) if use_uncertainty else (1 + variance_arr)
+        # In case of zero variance
+        V_inverse[~np.isfinite(V_inverse)] = 0
+
+        # M -- cosmic ray mask (Horne 1986)
+        M_new = (~mask_arr) & (P > 0)
+        M_old = np.zeros_like(M_new, dtype=bool)
+
+        k = 0
+        while np.any(M_new != M_old) & (k <= maxiters):
+
+            M_old = M_new.copy()
+
+            # f = (Σ M x (D-S)/P x P^2/V) / (Σ M x P^2/V) --- optimal object flux 
+            # (Horne 1986)
+            f = np.sum(M_old * data_arr * P * V_inverse, axis=0) / \
+                np.sum(M_old * P**2 * V_inverse, axis=0)
+
+            # var[f] = (Σ M x P) / (Σ M x P^2/V) --- variance of optimal 
+            # object flux (Horne 1986)
+            var_f = np.sum(M_old * P, axis=0) / np.sum(M_old * P**2 * V_inverse, axis=0)
+            
+            # Update
+            V_inverse = 1 / (rdnoise**2 + np.abs(f * P + S))
+
+            # Standardized residual
+            residual = (data_arr - f * P) * np.sqrt(V_inverse)
+
+            if maxiters == 0:
+                threshold_lower, threshold_upper = None, None
+
+            elif k < maxiters:
+                residual[(mask_arr | (P == 0))] = np.nan
+                residual_masked, threshold_lower, threshold_upper = sigma_clip(
+                    data=residual, sigma_lower=sigma_lower, sigma_upper=sigma_upper, 
+                    maxiters=1, stdfunc='mad_std', axis=None, masked=True, 
+                    return_bounds=True, grow=grow)
+                M_new = ~residual_masked.mask
+
+            k += 1
+
+        data_aper = f[np.newaxis]
+        uncertainty_aper = np.sqrt(var_f)[np.newaxis]
+        mask_aper = np.zeros_like(data_aper, dtype=bool)
+        
+        aper_edges = np.zeros((2, n_col))
+        for i in idx_col:
+            aper_edges[:, i] = np.where(P[:, i] > 0)[0][[0, -1]]
 
     # Plot
     _validateBool(show, 'show')
@@ -1686,22 +2047,39 @@ def extract(ccd, slit_along, trace1d, aper_width, method, psf_width=None, n_aper
         if title != 'aperture':
             title = f'{title} aperture'
 
-        fig, ax = plt.subplots(1, 1, dpi=100)
+        # Background image
+        height_ratios = (1 / 4.5, n_col / n_row)
+        fig, ax = plt.subplots(2, 1, sharex=True, height_ratios=height_ratios, dpi=100)
 
-        _plot2d(ax=ax, ccd=data_arr, cmap='Greys_r', contrast=0.25, aspect='auto')
-        (xmin, xmax), (ymin, ymax) = ax.get_xlim(), ax.get_ylim()
-        if slit_along == 'col':
-            for aper_edge in aper_edges:
-                ax.plot(idx_col, aper_edge, 'r--', lw=1.5)
-        else:
-            for aper_edge in aper_edges:
-                ax.plot(aper_edge, idx_row, 'r--', lw=1.5)
+        # Subplot 1
+        ax[0].step(idx_row, np.nanmedian(data_arr, axis=1), 'k-', lw=1.5, where='mid')
+        for aper_edge in aper_edges:
+            ax[0].axvline(x=aper_edge.mean(), ls='--', color='r', lw=1.5)
 
         # Settings
-        ax.set_xlim(xmin, xmax)
-        ax.set_ylim(ymin, ymax)
-        ax.set_title(title, fontsize=16)
-        fig.set_figheight(n_row / n_col * fig.get_figwidth())
+        ax[0].grid(axis='both', color='0.95', zorder=-1)
+        ax[0].tick_params(
+            which='major', direction='in', top=True, right=True, length=5, width=1.5, 
+            labelsize=12)
+        ax[0].set_ylabel('pixel value', fontsize=16)
+        ax[0].set_title(title, fontsize=16)
+
+        # Subplot 2
+        if slit_along == 'col':
+            xlabel, ylabel = 'row', 'column'
+        else:
+            xlabel, ylabel = 'column', 'row'
+        _plot2d(
+            ax=ax[1], ccd=data_arr.T, cmap='Greys_r', contrast=0.25, cbar=False, 
+            xlabel=xlabel, ylabel=ylabel, aspect='auto')
+        (xmin, xmax), (ymin, ymax) = ax[1].get_xlim(), ax[1].get_ylim()
+        for aper_edge in aper_edges:
+            ax[1].plot(aper_edge, idx_col, 'r--', lw=1.5)
+
+        # Settings
+        ax[1].set_xlim(xmin, xmax)
+        ax[1].set_ylim(ymin, ymax)
+        fig.set_figheight(fig.get_figwidth() * np.sum(height_ratios))
         fig.tight_layout()
 
         if save:
@@ -1781,7 +2159,7 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
     if extinct is not None:
 
         if isinstance(airmass, str):
-            airmass = spectrum1d.meta['header'][airmass]
+            airmass = ccd.meta[airmass]
 
         if isinstance(extinct, str):
             spectrum_ext = loadExtinctionCurve(extinct)
@@ -1877,6 +2255,6 @@ def calibrate2d(ccd, slit_along, exptime, airmass, extinct, sens1d,
         calibrated_ccd = np.ma.array(calibrated_ccd.data, mask=calibrated_ccd.mask)
 
     else:
-        calibrated_ccd = deepcopy(calibrated_ccd.data)
+        calibrated_ccd = calibrated_ccd.data.copy()
 
     return calibrated_ccd

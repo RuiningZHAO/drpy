@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: astro-drpy
-Version: 0.0.1.7
+Version: 0.0.1.8
 Summary: A data reduction toolkit for astronomical photometry and spectroscopy.
 Author-email: Ruining ZHAO <ruiningzhao@mail.bnu.edu.cn>
 Project-URL: Homepage, https://github.com/RuiningZHAO/drpy
@@ -11,6 +11,13 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.7.3
 Description-Content-Type: text/markdown
 License-File: LICENSE
+Requires-Dist: astropy>=4.3
+Requires-Dist: numpy>=1.20.1
+Requires-Dist: scipy>=1.7.2
+Requires-Dist: matplotlib>=3.6.3
+Requires-Dist: ccdproc>=2.2.0
+Requires-Dist: specutils>=1.7.0
+Requires-Dist: photutils>=1.3.0
 
 # drpy
 drpy (pronounced "doctor pi") is a **D**ata **R**eduction toolkit for astronomical **P**hotometry and spectroscop**Y**

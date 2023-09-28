@@ -170,7 +170,8 @@ def _refinePeaks(spectrum, peaks, heights, left_bases, right_bases, tolerance):
                 center = _center1D_Gaussian(x, y, initial_guess, 0)
                 refined_index.append(i); refined_peaks.append(center)
 
-            except (RuntimeError, TypeError, OptimizeWarning): # raise exception here
+            # raise exception here
+            except (RuntimeError, TypeError, ValueError, OptimizeWarning):
                 pass
 
     refined_index = np.array(refined_index)

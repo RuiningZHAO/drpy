@@ -1,5 +1,11 @@
 # .gitignore
+
+dist
+build
+
 bak
 tests
+
 .venv
 __pycache__
+.ipynb_checkpoints

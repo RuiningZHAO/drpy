@@ -9,7 +9,7 @@ from astropy import config as _config
 
 __all__ = ['__version__', 'conf']
 
-__version__ = '0.0.1.7'
+__version__ = '0.0.1.8'
 
 
 class Conf(_config.ConfigNamespace):

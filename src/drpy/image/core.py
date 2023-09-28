@@ -1,5 +1,4 @@
 import warnings
-from copy import deepcopy
 
 # AstroPy
 from astropy.time import Time
@@ -67,7 +66,7 @@ def concatenate(ccdlist, fits_section, scale=None):
         mask_arr = None
 
     else:
-        mask_arr = deepcopy(ccdlist[1].mask)
+        mask_arr = ccdlist[1].mask.copy()
         mask_arr[python_slice] = ccdlist[0].mask[python_slice]
 
     nccd = ccdlist[0].copy()

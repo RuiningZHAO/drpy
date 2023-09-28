@@ -55,7 +55,7 @@ def imstatistics(ccdlist, verbose=False):
     
     # Format
     for colname in ['MEAN', 'STDDEV', 'MIN', 'MAX']:
-        stats[colname].format = "g"
+        stats[colname].format = 'g'
 
     _validateBool(verbose, 'verbose')
 
