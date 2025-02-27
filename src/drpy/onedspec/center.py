@@ -1,4 +1,3 @@
-import warnings
 from copy import deepcopy
 
 # NumPy
@@ -8,6 +7,7 @@ from scipy import signal
 from scipy.optimize import curve_fit, OptimizeWarning
 # drpy
 from drpy.modeling.function import Gaussian1D
+from drpy.decorate import filterWarning
 
 __all__ = ['center1D', 'refinePeakBases', 'refinePeaks']
 
@@ -142,6 +142,7 @@ def refinePeakBases(peaks, left_bases, right_bases):
             'Peaks should locate between corresponding left and right bases.')
 
 
+@filterWarning('error', OptimizeWarning)
 def _refinePeaks(spectrum, peaks, heights, left_bases, right_bases, tolerance):
     """Refine peak locations."""
 
@@ -152,27 +153,23 @@ def _refinePeaks(spectrum, peaks, heights, left_bases, right_bases, tolerance):
 
     index = np.arange(spectrum.shape[0])
 
-    with warnings.catch_warnings():
+    refined_index = list()
+    refined_peaks = list()
 
-        warnings.simplefilter('error', OptimizeWarning)
+    for i in range(peaks.shape[0]):
 
-        refined_index = list()
-        refined_peaks = list()
+        initial_guess = heights[i], peaks[i], widths[i]
 
-        for i in range(peaks.shape[0]):
+        x = index[left_bases[i]:right_bases[i]]
+        y = spectrum[left_bases[i]:right_bases[i]]
 
-            initial_guess = heights[i], peaks[i], widths[i]
+        try:
+            center = _center1D_Gaussian(x, y, initial_guess, 0)
+            refined_index.append(i); refined_peaks.append(center)
 
-            x = index[left_bases[i]:right_bases[i]]
-            y = spectrum[left_bases[i]:right_bases[i]]
-
-            try:
-                center = _center1D_Gaussian(x, y, initial_guess, 0)
-                refined_index.append(i); refined_peaks.append(center)
-
-            # raise exception here
-            except (RuntimeError, TypeError, ValueError, OptimizeWarning):
-                pass
+        # raise exception here
+        except (RuntimeError, TypeError, ValueError, OptimizeWarning):
+            pass
 
     refined_index = np.array(refined_index)
     refined_peaks = np.array(refined_peaks)

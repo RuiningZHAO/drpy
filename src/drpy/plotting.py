@@ -323,7 +323,7 @@ def plot2d(ccd, cmap='Greys_r', contrast=0.25, cbar=True, xlabel='column',
             ax=ax, ccd=ccd, cmap=cmap, contrast=contrast, cbar=cbar, xlabel=xlabel, 
             ylabel=ylabel, cblabel=cblabel, **kwargs)
         ax.set_title(title, fontsize=16)
-        fig.set_figheight(ccd.shape[0] / ccd.shape[1] * fig.get_figwidth())
+        fig.set_figheight(ccd.shape[0] / ccd.shape[1] * (fig.get_figwidth() - 1) + 1)
         fig.tight_layout()
 
         if save:

@@ -26,6 +26,7 @@ src/drpy/onedspec/__init__.py
 src/drpy/onedspec/center.py
 src/drpy/onedspec/core.py
 src/drpy/onedspec/io.py
+src/drpy/onedspec/lib/extinction/LJextinct.dat
 src/drpy/onedspec/lib/extinction/baoextinct.dat
 src/drpy/onedspec/lib/onedstds/README
 src/drpy/onedspec/lib/onedstds/ctioextinct.dat
@@ -60,6 +61,7 @@ src/drpy/onedspec/lib/onedstds/bstdscal/hr8634.dat
 src/drpy/onedspec/lib/onedstds/bstdscal/hr9087.dat
 src/drpy/onedspec/lib/onedstds/bstdscal/names.men
 src/drpy/onedspec/lib/onedstds/bstdscal/standards.men
+src/drpy/onedspec/lib/onedstds/calspec/hd159222_stis_008.fits
 src/drpy/onedspec/lib/onedstds/ctio/multi1m.dat
 src/drpy/onedspec/lib/onedstds/ctio/multi4m.dat
 src/drpy/onedspec/lib/onedstds/ctio/multi4mech.dat
@@ -505,8 +507,6 @@ src/drpy/onedspec/lib/onedstds/spechayescal/pg1708602.dat
 src/drpy/onedspec/lib/onedstds/spechayescal/standards.men
 src/drpy/onedspec/lib/onedstds/spechayescal/wolf1346.dat
 src/drpy/twodspec/__init__.py
-src/drpy/twodspec/background.py
-src/drpy/twodspec/extract.py
+src/drpy/twodspec/core.py
 src/drpy/twodspec/longslit.py
-src/drpy/twodspec/trace.py
 src/drpy/twodspec/utils.py

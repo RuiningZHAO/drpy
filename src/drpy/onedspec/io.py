@@ -6,7 +6,7 @@ import numpy as np
 # AstroPy
 from astropy.io import fits
 from astropy.time import Time
-from astropy.table import QTable
+from astropy.table import Table, QTable
 import astropy.units as u
 from astropy.nddata import StdDevUncertainty
 # specutils
@@ -98,7 +98,7 @@ def saveSpectrum1D(file_name, spectrum1d, overwrite=False):
 
     return None
 
-# todo: Table -> QTable ???
+
 def loadSpectrum1D(file_name, ext=1, **kwargs):
     """Load tabular spectrum to `~specutils.Spectrum1D`.
     
@@ -121,13 +121,21 @@ def loadSpectrum1D(file_name, ext=1, **kwargs):
         header = hdu.header
         qtable = QTable.read(hdu)
 
-    if 'uncertainty' in qtable.colnames:
+    colnames = qtable.colnames
+
+    if 'spectral_axis' in colnames:
+        spectral_axis = qtable['spectral_axis']
+
+    else:
+        spectral_axis = qtable['unknown']
+
+    if 'uncertainty' in colnames:
         uncertainty = StdDevUncertainty(qtable['uncertainty'].value.T)
 
     else:
         uncertainty = None
 
-    if 'mask' in qtable.colnames:
+    if 'mask' in colnames:
         mask = qtable['mask'].value.T
 
     else:
@@ -136,8 +144,8 @@ def loadSpectrum1D(file_name, ext=1, **kwargs):
     meta = {'header': header}
 
     spectrum1d = Spectrum1D(
-        spectral_axis=qtable['spectral_axis'], flux=qtable['flux'].T, 
-        uncertainty=uncertainty, mask=mask, meta=meta)
+        spectral_axis=spectral_axis, flux=qtable['flux'].T, uncertainty=uncertainty, 
+        mask=mask, meta=meta)
 
     return spectrum1d
 
@@ -193,8 +201,9 @@ def loadStandardSpectrum(standard):
     
     print(os.path.join(dir_library, standard))
     
-    # All the standard spectrum should be named *.dat
-    results = [result for result in results if result.endswith('.dat')]
+    # All the standard spectrum should be named *.dat or *.fits
+    results = [
+        item for item in results if item.endswith('.dat') | item.endswith('.fits')]
 
     if not results:
         raise ValueError('No standard spectrum found.')
@@ -211,43 +220,53 @@ def loadStandardSpectrum(standard):
 
         # todo: add libraries
         if library in ['blackbody', 'ctio']:
+
             raise ValueError('`blackbody` and `ctio` are not supported yet.')
 
-        # Here no line is skipped because the first line starts with ``#``.
-        spectrum = np.loadtxt(path_to_standard).T
+        elif library == 'calspec':
 
-        if library in ['bstdscal', 'ctiocal', 'ctionewcal', 'iidscal', 'irscal', 
-                       'oke1990', 'redcal', 'spec16cal', 'spec50cal', 'spechayescal']:
-            wavelength, AB, bandpass = spectrum
-            flux = _AB_to_flux(wavelength, AB) * (u.erg / u.cm**2 / u.s /u.AA)
-            bandpass = bandpass * u.AA
-
-        # No bin for library `hststan`
-        elif library == 'hststan':
-            if standard.startswith('m'):
-                wavelength, AB = spectrum
-                flux = _AB_to_flux(wavelength, AB) * (u.erg / u.cm**2 / u.s /u.AA)
-
-            else:
-                # The third column is also flux but in [mJy]
-                wavelength, flux, _ = spectrum
-                flux = flux * 1e-16 * (u.erg / u.cm**2 / u.s /u.AA)
-
+            hdu = fits.open(path_to_standard)[1]
+            wavelength = np.array([line[0] for line in hdu.data]) * u.AA
+            flux = np.array([line[1] for line in hdu.data]) * (u.erg / u.cm**2 / u.s /u.AA)
             bandpass = None
 
-        elif library == 'okestan':
-            if standard.startswith('m'):
+        else:
+
+            # Here no line is skipped because the first line starts with ``#``.
+            spectrum = np.loadtxt(path_to_standard).T
+
+            if library in ['bstdscal', 'ctiocal', 'ctionewcal', 'iidscal', 'irscal', 
+                           'oke1990', 'redcal', 'spec16cal', 'spec50cal', 'spechayescal']:
                 wavelength, AB, bandpass = spectrum
                 flux = _AB_to_flux(wavelength, AB) * (u.erg / u.cm**2 / u.s /u.AA)
+                bandpass = bandpass * u.AA
 
-            else:
-                wavelength, flux, _, bandpass = spectrum
-                flux = flux * 1e-16 * (u.erg / u.cm**2 / u.s /u.AA)
+            # No bin for library `hststan`
+            elif library == 'hststan':
+                if standard.startswith('m'):
+                    wavelength, AB = spectrum
+                    flux = _AB_to_flux(wavelength, AB) * (u.erg / u.cm**2 / u.s /u.AA)
 
-            bandpass = bandpass * u.AA
+                else:
+                    # The third column is also flux but in [mJy]
+                    wavelength, flux, _ = spectrum
+                    flux = flux * 1e-16 * (u.erg / u.cm**2 / u.s /u.AA)
 
-        wavelength = wavelength * u.AA
-        
+                bandpass = None
+
+            elif library == 'okestan':
+                if standard.startswith('m'):
+                    wavelength, AB, bandpass = spectrum
+                    flux = _AB_to_flux(wavelength, AB) * (u.erg / u.cm**2 / u.s /u.AA)
+
+                else:
+                    wavelength, flux, _, bandpass = spectrum
+                    flux = flux * 1e-16 * (u.erg / u.cm**2 / u.s /u.AA)
+
+                bandpass = bandpass * u.AA
+
+            wavelength = wavelength * u.AA
+
         meta = {
             'header': {
                 'FILENAME': standard

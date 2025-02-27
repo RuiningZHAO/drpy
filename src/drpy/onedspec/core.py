@@ -843,7 +843,7 @@ def sensfunc(spectrum1d, exptime, airmass, extinct, standard, bandwid=None,
         uncertainty_sens_fit = StdDevUncertainty(uncertainty_sens_fit[::-1])
     else:
         sens_fit *= unit_sens_fit
-        sens_fit_uncertainty = StdDevUncertainty(uncertainty_sens_fit)
+        uncertainty_sens_fit = StdDevUncertainty(uncertainty_sens_fit)
 
     if 'header' in new_spectrum1d.meta:
         meta = new_spectrum1d.meta.copy()

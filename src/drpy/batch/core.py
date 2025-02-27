@@ -530,7 +530,7 @@ class CCDDataList:
 
     def to_list(self):
         """Convert to `list` object."""
-        return self._ccddatalist
+        return self.copy()._ccddatalist
 
 
     def copy(self):

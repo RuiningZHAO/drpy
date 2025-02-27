@@ -7,10 +7,10 @@ from astropy.utils.exceptions import AstropyUserWarning
 from scipy import interpolate
 from scipy.ndimage import gaussian_filter
 # drpy
-from drpy.decorate import ignoreWarning
+from drpy.decorate import filterWarning
 from drpy.validate import _validateBool, _validateInteger, _validate1DArray
 
-sigma_clip = ignoreWarning(sigma_clip, 'ignore', AstropyUserWarning)
+sigma_clip = filterWarning('ignore', AstropyUserWarning)(sigma_clip)
 
 __all__ = ['Poly1D', 'Spline1D', 'Spline2D', 'GaussianSmoothing2D']
 
