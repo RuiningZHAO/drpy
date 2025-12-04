@@ -797,8 +797,8 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3,
         bbox = [idx_col[0], idx_col[-1], idx_row[0], idx_row[-1]]
         bispl, residual, threshold_lower, threshold_upper, master_mask = Spline2D(
             x=x, y=y, z=z, m=mask, order=(order, 3), n_piece=(1, n_piece), bbox=bbox, 
-            maxiters=maxiters, sigma_lower=sigma_lower, sigma_upper=sigma_upper, axis=None, 
-            grow=grow, use_relative=False)
+            maxiters=maxiters, sigma_lower=sigma_lower, sigma_upper=sigma_upper, 
+            axis=None, grow=grow, use_relative=False)
 
         # !!! Extrapolation is used here (see above) !!!
         U = bispl(idx_col, idx_row, grid=True).T
@@ -898,7 +898,7 @@ def fitcoords(ccd, slit_along, order=0, n_med=5, prominence=1e-3, n_piece=3,
     return U, V
 
 # todo: check Delaunay method for uncertainty estimation.
-def transform(ccd, X, Y, flux=True):
+def transform(ccd, X, Y, flux=True, cval=0.):
     """Transform input frame to a new coordinate.
 
     Parameters
@@ -913,7 +913,13 @@ def transform(ccd, X, Y, flux=True):
         If `True` the interpolated output pixel value is multiplied by the Jacobean of 
         the transformation (essentially the ratio of pixel areas between the input and 
         output frames).
-    
+
+    cval : scalar, optional
+        Value to fill past edges of the mask array (if any). Note that the science data 
+        array itself is always filled using the nearest value. It is recommended to 
+        keep this set to `0` when applying the transformation to science frames.
+        Default is 0.0.
+
     Returns
     -------
     nccd : `~astropy.nddata.CCDData` or `~numpy.ndarray`
